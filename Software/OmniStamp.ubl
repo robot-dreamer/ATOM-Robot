@@ -1,0 +1,276 @@
+module OmniStamp_v4
+author 'Liang Shuai'
+version 0 41 
+tags 'omnistamp robot omni wheel' 
+description 'OmniStamp three-wheel omnidirectional robot library.
+
+Map coordinates use +X to the right and +Y downward. Wheel speed ranges
+from -100 to 100. Positive turn speed increases the OID heading angle.
+Wheel names are top, bottom-left, and bottom-right when viewed from above.
+
+V3 uses linear PWM without dead-zone compensation. The maximum wheel speed is
+fixed at 60 percent for 3 V motors powered from 5 V.
+V3.1 adds non-blocking target tracking.
+V4 adds cross-track error correction and low-speed approach to move-to-target.
+V4.1 delays deceleration until the final 50 map units and keeps enough torque.
+'
+variables _omni_top_sign _omni_bottom_left_sign _omni_bottom_right_sign _omni_motion_active _omni_tracking_enabled _omni_track_task_started _omni_target_x _omni_target_y _omni_target_speed _omni_track_hold_angle 
+
+  spec 'r' 'OmniStamp position X' 'position X'
+  spec 'r' 'OmniStamp position Y' 'position Y'
+  spec 'r' 'OmniStamp direction' 'direction'
+  spec 'r' 'OmniStamp on map' 'on map'
+  space
+  spec ' ' 'OmniStamp set wheel speeds' 'set wheel speeds top _ bottom-left _ bottom-right _ (-100 to 100)' 'num num num' 0 0 0
+  spec ' ' 'OmniStamp stop' 'stop wheels'
+  spec ' ' 'OmniStamp brake' 'brake wheels'
+  space
+  spec ' ' 'OmniStamp move robot' 'move robot forward _ right _ turn _ (-100 to 100)' 'num num num' 50 0 0
+  spec ' ' 'OmniStamp move on map' 'move on map X speed _ Y speed _ turn _' 'num num num' 50 0 0
+  spec ' ' 'OmniStamp move along X' 'move along map X at speed _' 'num' 50
+  spec ' ' 'OmniStamp move along Y' 'move along map Y at speed _' 'num' 50
+  space
+  spec ' ' 'OmniStamp move to' 'move to X _ Y _ at speed _' 'num num num' 100 100 50
+  spec ' ' 'OmniStamp track target' 'track target X _ Y _ at speed _' 'num num num' 100 100 50
+  space
+  spec ' ' '_omni_set_wheels' '_omni_set_wheels top _ bottom-left _ bottom-right _' 'num num num' 0 0 0
+  spec ' ' '_omni_set_motor' '_omni_set_motor pin 1 _ pin 2 _ speed _' 'num num num' 0 0 0
+  spec ' ' '_omni_apply_motion' '_omni_apply_motion forward _ right _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_move_on_map' '_omni_move_on_map X _ Y _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_track_target' '_omni_track_target'
+  spec 'r' '_omni_angle_error' '_omni_angle_error target _' 'num' 0
+  spec 'r' '_omni_limit' '_omni_limit _ to _' 'num num' 0 100
+
+to 'OmniStamp brake' {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  digitalWriteOp 14 true
+  digitalWriteOp 13 true
+  digitalWriteOp 41 true
+  digitalWriteOp 42 true
+  digitalWriteOp 1 true
+  digitalWriteOp 2 true
+  waitMillis 100
+  digitalWriteOp 14 false
+  digitalWriteOp 13 false
+  digitalWriteOp 41 false
+  digitalWriteOp 42 false
+  digitalWriteOp 1 false
+  digitalWriteOp 2 false
+}
+
+to 'OmniStamp direction' {
+  return (callCustomReporter '[sensors:position_yaw]')
+}
+
+to 'OmniStamp move along X' speed {
+  'OmniStamp move on map' speed 0 0
+}
+
+to 'OmniStamp move along Y' speed {
+  'OmniStamp move on map' 0 speed 0
+}
+
+to 'OmniStamp move on map' x_speed y_speed turn {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_move_on_map' x_speed y_speed turn
+}
+
+to 'OmniStamp move robot' forward right turn {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_apply_motion' forward right turn
+}
+
+to 'OmniStamp move to' target_x target_y speed {
+  _omni_tracking_enabled = false
+  _omni_motion_active = true
+  speed = (absoluteValue speed)
+  speed = (maximum 30 (minimum speed 100))
+  local 'start_time' (millisOp)
+  local 'hold_angle' ('OmniStamp direction')
+  local 'start_x' ('OmniStamp position X')
+  local 'start_y' ('OmniStamp position Y')
+  local 'path_dx' (target_x - start_x)
+  local 'path_dy' (target_y - start_y)
+  local 'path_length' ('[misc:sqrt]' ((path_dx * path_dx) + (path_dy * path_dy)))
+  local 'unit_x' ((path_dx * 1000) / (maximum path_length 1))
+  local 'unit_y' ((path_dy * 1000) / (maximum path_length 1))
+  local 'normal_x' (0 - unit_y)
+  local 'normal_y' unit_x
+  forever {
+    if (not _omni_motion_active) {exitLoop}
+    if (not ('OmniStamp on map')) {
+      'OmniStamp stop'
+      exitLoop
+    }
+    local 'current_x' ('OmniStamp position X')
+    local 'current_y' ('OmniStamp position Y')
+    local 'dx' (target_x - current_x)
+    local 'dy' (target_y - current_y)
+    local 'distance' ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+    if (distance <= 3) {
+      'OmniStamp brake'
+      exitLoop
+    }
+    if (((millisOp) - start_time) > 15000) {
+      'OmniStamp stop'
+      exitLoop
+    }
+    comment 'Keep the requested speed until the last 50 map units. Inside the
+approach zone, reduce speed but keep at least 30 percent to avoid stalling.'
+    local 'move_speed' speed
+    if (distance < 50) {
+      move_speed = (maximum 30 distance)
+      move_speed = (minimum move_speed speed)
+      if (move_speed < 30) {
+        move_speed = 30
+      }
+    }
+    comment 'Signed distance from the fixed start-to-target line. The normal
+vector is scaled by 1000 to preserve precision in integer arithmetic.'
+    local 'cross_error' ((((current_x - start_x) * normal_x) + ((current_y - start_y) * normal_y)) / 1000)
+    local 'cross_correction' ('_omni_limit' (cross_error * 2) 20)
+    comment 'Move toward the endpoint and add a perpendicular correction that
+pulls the robot back toward the original straight path.'
+    local 'x_speed' (((dx * move_speed) / (maximum distance 1)) - ((normal_x * cross_correction) / 1000))
+    local 'y_speed' (((dy * move_speed) / (maximum distance 1)) - ((normal_y * cross_correction) / 1000))
+    local 'turn_speed' ('_omni_limit' ('_omni_angle_error' hold_angle) 20)
+    '_omni_move_on_map' x_speed y_speed turn_speed
+    waitMillis 20
+  }
+  _omni_motion_active = false
+}
+
+to 'OmniStamp on map' {
+  return (callCustomReporter '[sensors:cube_status]')
+}
+
+to 'OmniStamp position X' {
+  return ((callCustomReporter '[sensors:position_x]') / 64)
+}
+
+to 'OmniStamp position Y' {
+  return ((callCustomReporter '[sensors:position_y]') / 64)
+}
+
+to 'OmniStamp set wheel speeds' top bottom_left bottom_right {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to 'OmniStamp stop' {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_set_wheels' 0 0 0
+}
+
+to 'OmniStamp track target' target_x target_y speed {
+  _omni_motion_active = false
+  if (not _omni_tracking_enabled) {
+    _omni_track_hold_angle = ('OmniStamp direction')
+  }
+  _omni_target_x = target_x
+  _omni_target_y = target_y
+  _omni_target_speed = (maximum 0 (minimum (absoluteValue speed) 100))
+  _omni_tracking_enabled = (booleanConstant true)
+  if (not _omni_track_task_started) {
+    _omni_track_task_started = (booleanConstant true)
+    sendBroadcast '_omni_track_target'
+  }
+}
+
+to '_omni_angle_error' target {
+  local 'error' ((target % 360) - ('OmniStamp direction'))
+  if (error > 180) {
+    error += -360
+  } (error < -180) {
+    error += 360
+  }
+  return error
+}
+
+to '_omni_apply_motion' forward right turn {
+  forward = ('_omni_limit' forward 100)
+  right = ('_omni_limit' right 100)
+  turn = ('_omni_limit' turn 100)
+  local 'top' ((0 - right) + turn)
+  local 'bottom_left' ((((-866 * forward) + (500 * right)) / 1000) + turn)
+  local 'bottom_right' ((((866 * forward) + (500 * right)) / 1000) + turn)
+  local 'largest' (maximum (absoluteValue top) (maximum (absoluteValue bottom_left) (absoluteValue bottom_right)))
+  if (largest > 100) {
+    top = ((top * 100) / largest)
+    bottom_left = ((bottom_left * 100) / largest)
+    bottom_right = ((bottom_right * 100) / largest)
+  }
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to '_omni_limit' value limit {
+  return (maximum (0 - limit) (minimum value limit))
+}
+
+to '_omni_move_on_map' x_speed y_speed turn {
+  local 'yaw_x100' (('OmniStamp direction') * 100)
+  local 'sin_yaw' ('[misc:sin]' yaw_x100)
+  local 'cos_yaw' ('[misc:sin]' (yaw_x100 + 9000))
+  local 'forward' (((x_speed * sin_yaw) + (y_speed * cos_yaw)) >> 14)
+  local 'right' ((((0 - x_speed) * cos_yaw) + (y_speed * sin_yaw)) >> 14)
+  '_omni_apply_motion' forward right turn
+}
+
+to '_omni_set_motor' pin1 pin2 speed {
+  speed = ('_omni_limit' speed 100)
+  local 'pwm' (((absoluteValue speed) * 1023) / 100)
+  if (speed > 0) {
+    digitalWriteOp pin2 false
+    analogWriteOp pin1 pwm
+  } (speed < 0) {
+    digitalWriteOp pin1 false
+    analogWriteOp pin2 pwm
+  } else {
+    digitalWriteOp pin1 false
+    digitalWriteOp pin2 false
+  }
+}
+
+to '_omni_set_wheels' top bottom_left bottom_right {
+  if (_omni_top_sign == 0) {
+    _omni_top_sign = 1
+    _omni_bottom_left_sign = 1
+    _omni_bottom_right_sign = 1
+  }
+  top = ('_omni_limit' top 100)
+  bottom_left = ('_omni_limit' bottom_left 100)
+  bottom_right = ('_omni_limit' bottom_right 100)
+  '_omni_set_motor' 41 42 (top * _omni_top_sign)
+  '_omni_set_motor' 1 2 (bottom_left * _omni_bottom_left_sign)
+  '_omni_set_motor' 14 13 (bottom_right * _omni_bottom_right_sign)
+}
+
+to '_omni_track_target' {
+  forever {
+    if _omni_tracking_enabled {if ('OmniStamp on map') {
+      local 'dx' (_omni_target_x - ('OmniStamp position X'))
+      local 'dy' (_omni_target_y - ('OmniStamp position Y'))
+      local 'distance' ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+      if (or (distance <= 3) (_omni_target_speed == 0)) {
+        '_omni_set_wheels' 0 0 0
+        _omni_track_task_started = (booleanConstant false)
+        return 0
+      } else {
+        local 'move_speed' (minimum _omni_target_speed (maximum 20 (distance * 2)))
+        local 'x_speed' ((dx * move_speed) / (maximum distance 1))
+        local 'y_speed' ((dy * move_speed) / (maximum distance 1))
+        local 'turn_speed' ('_omni_limit' ('_omni_angle_error' _omni_track_hold_angle) 30)
+        '_omni_move_on_map' x_speed y_speed turn_speed
+      }
+    } else {
+      '_omni_set_wheels' 0 0 0
+    }}
+    waitMillis 20
+  }
+}
+

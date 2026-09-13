@@ -1,0 +1,7 @@
+*.mov filter=lfs diff=lfs merge=lfs -text
+*.pdf binary
+*.step binary
+*.zip binary
+*.xlsx binary
+*.png binary
+*.jpg binary
