@@ -69,6 +69,7 @@ The map coordinate convention used by the library is positive X to the right and
 
 ## Demonstrations
 
+- [Maze navigation using onboard localization](Videos/Maze.MOV)
 - [Formation performance](Videos/Formation%20performance.mov)
 - [Collaborative handling](Videos/Collaborative%20handling.mov)
 
