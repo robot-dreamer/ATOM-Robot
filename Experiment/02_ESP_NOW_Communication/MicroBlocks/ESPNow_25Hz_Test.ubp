@@ -1,0 +1,511 @@
+module main
+author 'Liang Shuai'
+version 1 0
+description 'ESP-NOW communication test for up to five ATOM robots.
+
+Load the same project on every robot. Button A decreases the robot ID and
+button B increases it; IDs wrap between 1 and 5. Every robot broadcasts a
+state packet at 25 Hz. Any robot can act as the monitor by running the
+start ESP-NOW test block and inspecting or printing the result reporters.
+'
+variables ID sequence_number next_send_ms test_running test_finished test_start_ms test_end_ms test_duration_ms sent_during_test received_counts first_sequences last_sequences last_receive_times max_intervals duplicate_counts out_of_order_counts last_display_ms
+
+  spec ' ' 'start ESP-NOW test' 'start ESP-NOW test for _ seconds' 'num' 60
+  spec ' ' 'reset ESP-NOW statistics' 'reset ESP-NOW statistics'
+  spec ' ' 'print ESP-NOW results' 'print ESP-NOW results'
+  space
+  spec 'r' 'ESP-NOW robot ID' 'ESP-NOW robot ID'
+  spec 'r' 'ESP-NOW test running' 'ESP-NOW test running?'
+  spec 'r' 'ESP-NOW test finished' 'ESP-NOW test finished?'
+  spec 'r' 'ESP-NOW test elapsed' 'ESP-NOW test elapsed (ms)'
+  space
+  spec 'r' 'ESP-NOW received from ID' 'ESP-NOW received from ID _' 'num' 2
+  spec 'r' 'ESP-NOW expected from ID' 'ESP-NOW expected from ID _' 'num' 2
+  spec 'r' 'ESP-NOW PDR from ID' 'ESP-NOW PDR from ID _ (%)' 'num' 2
+  spec 'r' 'ESP-NOW rate from ID' 'ESP-NOW rate from ID _ (Hz)' 'num' 2
+  spec 'r' 'ESP-NOW max interval from ID' 'ESP-NOW max interval from ID _ (ms)' 'num' 2
+  spec 'r' 'ESP-NOW aggregate PDR' 'ESP-NOW aggregate PDR (%)'
+  spec 'r' 'ESP-NOW aggregate rate' 'ESP-NOW aggregate receive rate (Hz)'
+  spec 'r' 'ESP-NOW result header' 'ESP-NOW result CSV header'
+  spec 'r' 'ESP-NOW result CSV' 'ESP-NOW result CSV'
+
+to '_valid_robot_id' robot_id {
+  return (and (robot_id >= 1) (robot_id <= 5))
+}
+
+to '_show_robot_id' {
+  '[tft:clear]'
+  displayCharacter ID
+}
+
+to '_aggregate_received' {
+  local 'received_total' 0
+  for sender 5 {
+    if (sender != ID) {
+      received_total += (at sender received_counts)
+    }
+  }
+  return received_total
+}
+
+to '_show_running_screen' {
+  local 'remaining_ms' (maximum 0 (test_duration_ms - ((millisOp) - test_start_ms)))
+  '[tft:clear]'
+  tft_drawText ('[data:join]' 'ID ' ID '  RUN') 8 8 (makeColor 0 220 255) 2
+  tft_drawText ('[data:join]' 'Time ' (remaining_ms / 1000) ' s') 8 42 (makeColor 255 255 255) 2
+  tft_drawText ('[data:join]' 'RX ' ('_aggregate_received')) 8 76 (makeColor 255 210 0) 2
+}
+
+to '_show_result_screen' {
+  '[tft:clear]'
+  tft_drawText ('[data:join]' 'ID ' ID '  DONE') 8 8 (makeColor 0 220 255) 2
+  tft_drawText ('[data:join]' 'PDR ' ('ESP-NOW aggregate PDR') '%') 8 38 (makeColor 80 255 80) 2
+  tft_drawText ('[data:join]' 'Rate ' ('ESP-NOW aggregate rate') ' Hz') 8 68 (makeColor 255 210 0) 2
+  local 'row_y' 100
+  for sender 5 {
+    if (sender == ID) {
+      tft_drawText ('[data:join]' 'ID' sender ': self') 8 row_y (makeColor 150 150 150) 2
+    } else {
+      tft_drawText ('[data:join]' 'ID' sender ': ' (at sender received_counts)) 8 row_y (makeColor 255 255 255) 2
+    }
+    row_y += 24
+  }
+}
+
+to '_set_robot_id' new_id {
+  if test_running {return}
+  ID = new_id
+  if (ID < 1) {ID = 5}
+  if (ID > 5) {ID = 1}
+  sequence_number = 0
+  'reset ESP-NOW statistics'
+  '_show_robot_id'
+}
+
+to 'ESP-NOW robot ID' {
+  return ID
+}
+
+to 'ESP-NOW test running' {
+  return test_running
+}
+
+to 'ESP-NOW test finished' {
+  return test_finished
+}
+
+to 'ESP-NOW test elapsed' {
+  if test_running {
+    return ((millisOp) - test_start_ms)
+  }
+  return (maximum 0 (test_end_ms - test_start_ms))
+}
+
+to 'reset ESP-NOW statistics' {
+  received_counts = ('[data:makeList]' 0 0 0 0 0)
+  first_sequences = ('[data:makeList]' 0 0 0 0 0)
+  last_sequences = ('[data:makeList]' 0 0 0 0 0)
+  last_receive_times = ('[data:makeList]' 0 0 0 0 0)
+  max_intervals = ('[data:makeList]' 0 0 0 0 0)
+  duplicate_counts = ('[data:makeList]' 0 0 0 0 0)
+  out_of_order_counts = ('[data:makeList]' 0 0 0 0 0)
+  sent_during_test = 0
+  test_start_ms = (millisOp)
+  test_end_ms = test_start_ms
+  test_finished = (booleanConstant false)
+}
+
+to 'start ESP-NOW test' seconds {
+  if test_running {return}
+  'reset ESP-NOW statistics'
+  test_duration_ms = ((maximum 1 seconds) * 1000)
+  test_start_ms = (millisOp)
+  test_end_ms = test_start_ms
+  test_running = (booleanConstant true)
+  last_display_ms = 0
+  '_show_running_screen'
+}
+
+to 'ESP-NOW received from ID' sender {
+  if (not ('_valid_robot_id' sender)) {return 0}
+  return (at sender received_counts)
+}
+
+to 'ESP-NOW expected from ID' sender {
+  if (not ('_valid_robot_id' sender)) {return 0}
+  local 'first_sequence' (at sender first_sequences)
+  local 'last_sequence' (at sender last_sequences)
+  if (or (first_sequence == 0) (last_sequence < first_sequence)) {return 0}
+  return ((last_sequence - first_sequence) + 1)
+}
+
+to 'ESP-NOW PDR from ID' sender {
+  local 'expected' ('ESP-NOW expected from ID' sender)
+  if (expected <= 0) {return 0}
+  return (((at sender received_counts) * 100) / expected)
+}
+
+to 'ESP-NOW rate from ID' sender {
+  if (not ('_valid_robot_id' sender)) {return 0}
+  local 'elapsed' ('ESP-NOW test elapsed')
+  if (elapsed <= 0) {return 0}
+  return (((at sender received_counts) * 1000) / elapsed)
+}
+
+to 'ESP-NOW max interval from ID' sender {
+  if (not ('_valid_robot_id' sender)) {return 0}
+  return (at sender max_intervals)
+}
+
+to 'ESP-NOW aggregate PDR' {
+  local 'received_total' 0
+  local 'expected_total' 0
+  for sender 5 {
+    if (sender != ID) {
+      received_total += (at sender received_counts)
+      expected_total += ('ESP-NOW expected from ID' sender)
+    }
+  }
+  if (expected_total <= 0) {return 0}
+  return ((received_total * 100) / expected_total)
+}
+
+to 'ESP-NOW aggregate rate' {
+  local 'received_total' 0
+  local 'elapsed' ('ESP-NOW test elapsed')
+  if (elapsed <= 0) {return 0}
+  for sender 5 {
+    if (sender != ID) {
+      received_total += (at sender received_counts)
+    }
+  }
+  return ((received_total * 1000) / elapsed)
+}
+
+to 'ESP-NOW result header' {
+  return 'receiver_id,duration_ms,sent,rx1,expected1,pdr1,max_gap1_ms,rx2,expected2,pdr2,max_gap2_ms,rx3,expected3,pdr3,max_gap3_ms,rx4,expected4,pdr4,max_gap4_ms,rx5,expected5,pdr5,max_gap5_ms,aggregate_pdr,aggregate_rate_hz'
+}
+
+to 'ESP-NOW result CSV' {
+  return ('[data:join]' ID ',' ('ESP-NOW test elapsed') ',' sent_during_test ','
+    (at 1 received_counts) ',' ('ESP-NOW expected from ID' 1) ',' ('ESP-NOW PDR from ID' 1) ',' (at 1 max_intervals) ','
+    (at 2 received_counts) ',' ('ESP-NOW expected from ID' 2) ',' ('ESP-NOW PDR from ID' 2) ',' (at 2 max_intervals) ','
+    (at 3 received_counts) ',' ('ESP-NOW expected from ID' 3) ',' ('ESP-NOW PDR from ID' 3) ',' (at 3 max_intervals) ','
+    (at 4 received_counts) ',' ('ESP-NOW expected from ID' 4) ',' ('ESP-NOW PDR from ID' 4) ',' (at 4 max_intervals) ','
+    (at 5 received_counts) ',' ('ESP-NOW expected from ID' 5) ',' ('ESP-NOW PDR from ID' 5) ',' (at 5 max_intervals) ','
+    ('ESP-NOW aggregate PDR') ',' ('ESP-NOW aggregate rate'))
+}
+
+to 'print ESP-NOW results' {
+  sayIt ('ESP-NOW result header')
+  sayIt ('ESP-NOW result CSV')
+}
+
+script 40 30 {
+whenStarted
+ID = 1
+sequence_number = 0
+test_running = (booleanConstant false)
+test_finished = (booleanConstant false)
+test_duration_ms = 60000
+'[net:ESPNowSetChannel]' 13
+'[net:ESPNowSetGroup]' 211
+'reset ESP-NOW statistics'
+'_show_robot_id'
+sendBroadcast 'send ESP-NOW test packets'
+sendBroadcast 'manage ESP-NOW test'
+}
+
+script 400 30 {
+whenButtonPressed 'A'
+'_set_robot_id' (ID - 1)
+}
+
+script 600 30 {
+whenButtonPressed 'B'
+'_set_robot_id' (ID + 1)
+}
+
+script 40 520 {
+whenBroadcastReceived 'send ESP-NOW test packets'
+next_send_ms = ((millisOp) + (random 0 39))
+forever {
+  local 'remaining_ms' (next_send_ms - (millisOp))
+  if (remaining_ms > 0) {waitMillis remaining_ms}
+  sequence_number += 1
+  local 'x' (callCustomReporter '[sensors:position_x]')
+  local 'y' (callCustomReporter '[sensors:position_y]')
+  local 'heading' (callCustomReporter '[sensors:position_yaw]')
+  local 'payload' ('[data:join]' sequence_number ',' x ',' y ',' heading ',0')
+  espNow_send_pair payload ID
+  if test_running {sent_during_test += 1}
+  next_send_ms += 40
+  if (next_send_ms < (millisOp)) {next_send_ms = (millisOp)}
+}
+}
+
+script 450 520 {
+whenCondition (espNow_receive_any)
+if (and test_running ((espNow_last_type) == 'pair')) {
+  local 'sender' (espNow_last_number)
+  if (and ('_valid_robot_id' sender) (sender != ID)) {
+    local 'parts' ('[data:split]' (espNow_last_string) ',')
+    if ((size parts) >= 1) {
+      local 'remote_sequence' ('[data:convertType]' (at 1 parts) 'number')
+      local 'last_sequence' (at sender last_sequences)
+      local 'now' (millisOp)
+      if (last_sequence == 0) {
+        atPut sender first_sequences remote_sequence
+        atPut sender last_sequences remote_sequence
+        atPut sender received_counts 1
+        atPut sender last_receive_times now
+      } (remote_sequence > last_sequence) {
+        local 'interval' (now - (at sender last_receive_times))
+        if (interval > (at sender max_intervals)) {
+          atPut sender max_intervals interval
+        }
+        atPut sender received_counts ((at sender received_counts) + 1)
+        atPut sender last_sequences remote_sequence
+        atPut sender last_receive_times now
+      } (remote_sequence == last_sequence) {
+        atPut sender duplicate_counts ((at sender duplicate_counts) + 1)
+      } else {
+        atPut sender out_of_order_counts ((at sender out_of_order_counts) + 1)
+      }
+    }
+  }
+}
+}
+
+script 850 520 {
+whenBroadcastReceived 'manage ESP-NOW test'
+forever {
+  if (and test_running (((millisOp) - last_display_ms) >= 500)) {
+    last_display_ms = (millisOp)
+    '_show_running_screen'
+  }
+  if (and test_running (((millisOp) - test_start_ms) >= test_duration_ms)) {
+    test_end_ms = (millisOp)
+    test_running = (booleanConstant false)
+    test_finished = (booleanConstant true)
+    'print ESP-NOW results'
+    '_show_result_screen'
+  }
+  waitMillis 20
+}
+}
+
+
+module 'ESP Now' Comm
+author MicroBlocks
+version 1 3
+description 'Support for ESP Now peer-to-peer messaging for ESP boards.'
+variables _espNow_lastNumber _espNow_lastString _espNow_lastType
+
+  spec ' ' 'espNow_send_pair' 'espNow send pair _ = _' 'str num' 'light' 10
+  spec 'r' 'espNow_receive_any' 'espNow message received?'
+  spec 'r' 'espNow_last_type' 'espNow last message type'
+  spec 'r' 'espNow_last_number' 'espNow last number'
+  spec 'r' 'espNow_last_string' 'espNow last string'
+  space
+  spec ' ' '[net:ESPNowSetGroup]' 'espNow set group _ (0-255)' 'num' 0
+  spec 'r' '[net:ESPNowGroup]' 'espNow group'
+  space
+  advanced
+  spec ' ' 'espNow_send' 'espNow send raw _' 'str' 'Hello, ESP Now!'
+  spec 'r' '[net:ESPNowReceive]' 'espNow receive raw'
+  space
+  spec ' ' '[net:ESPNowSetChannel]' 'espNow set channel _' 'menu.range:1-13' 1
+  spec 'r' '[net:ESPNowChannel]' 'espNow channel'
+
+to espNow_last_number {
+  return _espNow_lastNumber
+}
+
+to espNow_last_string {
+  return _espNow_lastString
+}
+
+to espNow_last_type {
+  return _espNow_lastType
+}
+
+to espNow_receive_any {
+  local 'msg' ('[net:ESPNowReceive]')
+  if ((size msg) == 0) {
+    return (booleanConstant false)
+  }
+  if (msg == 'run') {
+    _espNow_lastType = 'run'
+    _espNow_lastString = msg
+    return (booleanConstant true)
+  }
+  if (and ((size msg) >= 5) ('NOW' == ('[data:copyFromTo]' msg 1 3))) {
+    local 'parts' ('[data:split]' msg '|')
+    if ((size parts) == 3) {
+      _espNow_lastType = 'pair'
+      _espNow_lastNumber = ('[data:convertType]' (at 2 parts) 'number')
+      _espNow_lastString = (at 3 parts)
+      return (booleanConstant true)
+    }
+  }
+  _espNow_lastType = 'other'
+  _espNow_lastString = msg
+  return (booleanConstant true)
+}
+
+to espNow_send msg {
+  '[net:ESPNowSend]' ('[data:convertType]' msg 'string')
+}
+
+to espNow_send_pair s n {
+  espNow_send ('[data:join]' 'NOW' '|' ('[data:toString]' n) '|' s)
+}
+
+
+module 'LED Display' Output
+author MicroBlocks
+version 1 15
+description 'Display the selected ATOM robot ID as a large character.'
+
+  spec ' ' 'displayCharacter' 'display character _' 'str' '1'
+  spec ' ' '[display:mbDisplayOff]' 'clear display'
+
+to displayCharacter s {
+  s = ('[data:join]' '' s)
+  if ((size s) == 0) {
+    '[display:mbDisplayOff]'
+    return 0
+  }
+  '[display:mbDrawShape]' ('[display:mbShapeForLetter]' (at 1 s)) 1 1
+}
+
+
+module TFT Output
+author MicroBlocks
+version 1 19
+description 'Draw graphics and write text on boards with a TFT display.'
+
+  spec ' ' '[tft:clear]' 'clear TFT display'
+  space
+  spec ' ' '[tft:rect]' 'draw rectangle on TFT at x _ y _ width _ height _ color _ : filled _' 'num num num num color bool' 10 10 40 30 nil true
+  spec ' ' '[tft:roundedRect]' 'draw rounded rectangle on TFT at x _ y _ width _ height _ radius _ color _ : filled _' 'num num num num num color bool' 10 10 40 30 8 nil true
+  spec ' ' '[tft:circle]' 'draw circle on TFT at x _ y _ radius _ color _ : filled _' 'num num num color bool' 40 40 30 nil true
+  spec ' ' '[tft:triangle]' 'draw triangle on TFT at x _ y _ , x _ y _ , x _ y _ color _ : filled _' 'num num num num num num color bool' 20 20 30 80 60 5 nil true
+  spec ' ' '[tft:line]' 'draw line on TFT from x _ y _ to x _ y _ color _' 'num num num num color' 12 8 25 15
+  spec ' ' 'tft_drawVector' 'draw vector x _ y _ angle _ length _ color _' 'num num num num color' 40 40 45 40
+  space
+  spec ' ' '[tft:text]' 'write _ on TFT at x _ y _ color _ : scale _ wrap _ : bg color _' 'str num num color num bool color' 'Hello World!' 5 5 nil 2 true
+  spec ' ' 'tft_drawText' 'draw text _ on TFT at x _ y _ color _ : scale _ : bg color _' 'str num num color num color' 'Line 1
+Line 2' 50 20 nil 2
+  space
+  spec ' ' '[tft:setPixel]' 'set TFT pixel x _ y _ to _' 'num num color' 10 10
+  spec ' ' '[tft:pixelRow]' 'draw pixel row _ x _ y _ : bytes per pixel _ : palette _' 'auto num num num str' 'aList' 0 0 4
+  spec ' ' '[tft:drawBitmap]' 'draw bitmap _ palette _ on TFT at x _ y _' 'str str num num' 'aBitmap' 'a list of colors' 10 10
+  space
+  spec 'r' 'tft_colorSwatch' '_' 'color'
+  spec 'r' 'makeColor' 'color r _ g _ b _ (0-255)' 'num num num' 0 100 100
+  spec 'r' 'makeGray' 'gray _ %' 'num' 50
+  spec 'r' 'randomColor' 'random color'
+  space
+  spec ' ' 'tft_drawImage' 'draw image _ on TFT at x _ y _ color _ : #BR# scale _' 'str num num color num' '' 0 0 nil 1
+  spec 'r' 'tft_image' 'image _' 'str' '00000
+01010
+00000
+10001
+01110'
+  space
+  spec 'r' '[tft:getWidth]' 'TFT width'
+  spec 'r' '[tft:getHeight]' 'TFT height'
+  space
+  spec ' ' '[tft:setBacklight]' 'set TFT backlight _ (0-10)' 'num' 10
+  spec ' ' '[tft:invertDisplay]' 'invert TFT display _' 'bool' false
+  advanced
+  spec ' ' 'tft_deferOLEDDisplayUpdates' 'defer OLED display updates'
+  spec ' ' 'tft_resumeOLEDDisplayUpdates' 'resume OLED display updates'
+  space
+  spec ' ' '_deferMonochromeDisplayUpdates' '_defer monochrome display updates'
+  spec ' ' '_resumeMonochromeDisplayUpdates' '_resume monochrome display updates'
+
+to '_deferMonochromeDisplayUpdates' {
+  '[tft:deferUpdates]'
+}
+
+to '_resumeMonochromeDisplayUpdates' {
+  '[tft:resumeUpdates]'
+}
+
+to makeColor r g b {
+  r = (maximum 0 (minimum r 255))
+  g = (maximum 0 (minimum g 255))
+  b = (maximum 0 (minimum b 255))
+  return ((r << 16) | ((g << 8) | b))
+}
+
+to makeGray percent {
+  gray = ((percent * 255) / 100)
+  gray = (maximum 0 (minimum gray 255))
+  return ((gray << 16) | ((gray << 8) | gray))
+}
+
+to randomColor {
+  local 'n1' (random 100 200)
+  local 'n2' (random 0 100)
+  if (1 == (random 1 3)) {
+    return ((n1 << 16) | (n2 << 8))
+  } (1 == (random 1 2)) {
+    return ((n2 << 16) | n1)
+  } else {
+    return ((n1 << 8) | n2)
+  }
+}
+
+to tft_colorSwatch color {
+  return color
+}
+
+to tft_deferOLEDDisplayUpdates {
+  '[tft:deferUpdates]'
+}
+
+to tft_drawImage imageString x y c optionalScale {
+  local 'scale' (argOrDefault 5 1)
+  local 'left' x
+  for ch ('[data:convertType]' imageString 'byte array') {
+    if (ch == 10) {
+      y += scale
+      x = left
+    } else {
+      if (ch == 49) {'[tft:rect]' x y scale scale c}
+      x += scale
+    }
+  }
+}
+
+to tft_drawText s x y color optionalScale optionalBGColor {
+  s = ('[data:convertType]' s 'string')
+  local 'scale' (argOrDefault 5 2)
+  local 'bgColor' (argOrDefault 6 '')
+  for line ('[data:split]' s ('[data:unicodeString]' 10)) {
+    if (isType bgColor 'number') {
+      '[tft:text]' line x y color scale false bgColor
+    } else {
+      '[tft:text]' line x y color scale false
+    }
+    y += (8 * scale)
+  }
+}
+
+to tft_drawVector x y angle length color {
+  local 'endX' (x + ((length * ('[misc:sin]' (100 * (angle + 90)))) >> 14))
+  local 'endY' (y + ((length * ('[misc:sin]' (100 * angle))) >> 14))
+  '[tft:line]' x y endX endY color
+}
+
+to tft_image s {
+  return ('[data:convertType]' s 'string')
+}
+
+to tft_resumeOLEDDisplayUpdates {
+  '[tft:resumeUpdates]'
+}

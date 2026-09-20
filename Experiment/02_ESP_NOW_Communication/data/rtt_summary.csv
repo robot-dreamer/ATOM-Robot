@@ -1,0 +1,7 @@
+message_bytes,trials,attempts_per_trial,aggregate_success_percent,mean_rtt_ms,std_trial_mean_rtt_ms
+10,5,100,96.0,4.56,0.29
+50,5,100,96.4,5.67,0.53
+100,5,100,93.2,6.07,0.15
+150,5,100,92.8,7.31,0.21
+200,5,100,88.8,8.03,0.14
+250,5,100,88.0,8.91,0.27

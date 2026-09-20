@@ -1,0 +1,16 @@
+{
+  "source_csv": "circle/omnistamp_circle_20260914_192932.csv",
+  "coordinate_scale": 64.0,
+  "unit": "Unit",
+  "samples_input": 1563,
+  "samples": 1559,
+  "samples_removed": 4,
+  "max_abs_radial_error_filter": 40.0,
+  "max_isolated_step_filter": 30.0,
+  "center_x": 300.0,
+  "center_y": 300.0,
+  "reference_radius": 150.0,
+  "radial_rmse": 2.0793662900989807,
+  "radial_mae": 1.656379978298094,
+  "radial_max_abs_error": 6.754100885850022
+}

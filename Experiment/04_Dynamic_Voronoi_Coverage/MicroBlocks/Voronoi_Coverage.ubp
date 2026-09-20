@@ -1,0 +1,915 @@
+module main
+author 'Liang Shuai'
+version 1 2
+description 'Dynamic onboard Voronoi coverage for up to five ATOM robots.
+
+Load the same program on every robot. Before placing a robot on the encoded
+map, use buttons A and B to decrease or increase its ID from 1 to 5. A robot
+joins automatically when valid OID feedback is available and leaves when its
+state has not been received for the configured timeout.
+
+Each robot clips the rectangular workspace by the pairwise Voronoi
+half-planes, computes the centroid of its own cell, and tracks that centroid
+using the OmniStamp position controller. The host computer is not involved in
+the control loop.
+
+V1.1 replaces all floating-point literals and interpolation with integer-only
+half-plane clipping and polygon-centroid calculations for MicroBlocks.
+V1.2 keeps the robot ID continuously visible on the onboard display.
+'
+variables ID coverage_enabled workspace_min_x workspace_max_x workspace_min_y workspace_max_y coverage_speed neighbor_timeout_ms neighbor_x neighbor_y neighbor_time cell_x cell_y centroid_x centroid_y target_x target_y target_initialized active_count sequence_number coverage_state 
+
+  spec ' ' 'set Voronoi robot ID' 'set Voronoi robot ID _ (1 to 5)' 'num' 1
+  spec ' ' 'set Voronoi running' 'set Voronoi coverage running _' 'bool' true
+  spec ' ' 'set Voronoi workspace' 'set Voronoi workspace X _ to _ Y _ to _' 'num num num num' 30 570 30 570
+  spec ' ' 'set Voronoi speed' 'set Voronoi speed _ (0 to 100)' 'num' 60
+  space
+  spec 'r' 'Voronoi robot ID' 'Voronoi robot ID'
+  spec 'r' 'Voronoi active robots' 'Voronoi active robots'
+  spec 'r' 'Voronoi centroid X' 'Voronoi centroid X'
+  spec 'r' 'Voronoi centroid Y' 'Voronoi centroid Y'
+  spec 'r' 'Voronoi cell X list' 'Voronoi cell X list'
+  spec 'r' 'Voronoi cell Y list' 'Voronoi cell Y list'
+
+to 'Voronoi active robots' {
+  return active_count
+}
+
+to 'Voronoi cell X list' {
+  return cell_x
+}
+
+to 'Voronoi cell Y list' {
+  return cell_y
+}
+
+to 'Voronoi centroid X' {
+  return centroid_x
+}
+
+to 'Voronoi centroid Y' {
+  return centroid_y
+}
+
+to 'Voronoi robot ID' {
+  return ID
+}
+
+to '_append_intersection' start_x start_y end_x end_y a b c output_x output_y {
+  local 'start_value' (((a * start_x) + (b * start_y)) - c)
+  local 'end_value' (((a * end_x) + (b * end_y)) - c)
+  local 'denominator' (start_value - end_value)
+  if (denominator == 0) {
+    return
+  }
+  local 'intersection_x' (((start_value * end_x) - (end_value * start_x)) / denominator)
+  local 'intersection_y' (((start_value * end_y) - (end_value * start_y)) / denominator)
+  '[data:addLast]' intersection_x output_x
+  '[data:addLast]' intersection_y output_y
+}
+
+to '_clip_cell' a b c {
+  local 'vertex_count' (size cell_x)
+  if (vertex_count < 3) {
+    cell_x = ('[data:makeList]')
+    cell_y = ('[data:makeList]')
+    return
+  }
+  local 'output_x' ('[data:makeList]')
+  local 'output_y' ('[data:makeList]')
+  local 'start_x' (at vertex_count cell_x)
+  local 'start_y' (at vertex_count cell_y)
+  local 'start_inside' ('_inside_half_plane' start_x start_y a b c)
+  for vertex_id vertex_count {
+    local 'end_x' (at vertex_id cell_x)
+    local 'end_y' (at vertex_id cell_y)
+    local 'end_inside' ('_inside_half_plane' end_x end_y a b c)
+    if (and start_inside end_inside) {
+      '[data:addLast]' end_x output_x
+      '[data:addLast]' end_y output_y
+    } (and start_inside (not end_inside)) {
+      '_append_intersection' start_x start_y end_x end_y a b c output_x output_y
+    } (and (not start_inside) end_inside) {
+      '_append_intersection' start_x start_y end_x end_y a b c output_x output_y
+      '[data:addLast]' end_x output_x
+      '[data:addLast]' end_y output_y
+    }
+    start_x = end_x
+    start_y = end_y
+    start_inside = end_inside
+  }
+  cell_x = output_x
+  cell_y = output_y
+}
+
+to '_compute_cell_centroid' self_x self_y {
+  local 'vertex_count' (size cell_x)
+  if (vertex_count < 3) {
+    centroid_x = self_x
+    centroid_y = self_y
+    return
+  }
+  local 'twice_area' 0
+  local 'centroid_x_sum' 0
+  local 'centroid_y_sum' 0
+  for vertex_id vertex_count {
+    local 'next_id' (vertex_id + 1)
+    if (next_id > vertex_count) {
+      next_id = 1
+    }
+    local 'x_1' (at vertex_id cell_x)
+    local 'y_1' (at vertex_id cell_y)
+    local 'x_2' (at next_id cell_x)
+    local 'y_2' (at next_id cell_y)
+    local 'cross' ((x_1 * y_2) - (x_2 * y_1))
+    twice_area += cross
+    centroid_x_sum += ((x_1 + x_2) * cross)
+    centroid_y_sum += ((y_1 + y_2) * cross)
+  }
+  if (twice_area == 0) {
+    centroid_x = self_x
+    centroid_y = self_y
+  } else {
+    centroid_x = (centroid_x_sum / (3 * twice_area))
+    centroid_y = (centroid_y_sum / (3 * twice_area))
+  }
+}
+
+to '_compute_voronoi_target' {
+  local 'self_x' ('OmniStamp position X')
+  local 'self_y' ('OmniStamp position Y')
+  cell_x = ('[data:makeList]' workspace_min_x workspace_max_x workspace_max_x workspace_min_x)
+  cell_y = ('[data:makeList]' workspace_min_y workspace_min_y workspace_max_y workspace_max_y)
+  for peer_id 5 {
+    if ('_peer_active' peer_id) {
+      local 'peer_x' (at peer_id neighbor_x)
+      local 'peer_y' (at peer_id neighbor_y)
+      local 'a' (2 * (peer_x - self_x))
+      local 'b' (2 * (peer_y - self_y))
+      if (((absoluteValue a) + (absoluteValue b)) < 1) {
+        peer_x += ((peer_id - ID) * 2)
+        a = (2 * (peer_x - self_x))
+      }
+      local 'c' (((peer_x * peer_x) + (peer_y * peer_y)) - ((self_x * self_x) + (self_y * self_y)))
+      '_clip_cell' a b c
+    }
+  }
+  '_compute_cell_centroid' self_x self_y
+  if (not target_initialized) {
+    target_x = centroid_x
+    target_y = centroid_y
+    target_initialized = (booleanConstant true)
+  } else {
+    target_x = (((3 * target_x) + centroid_x) / 4)
+    target_y = (((3 * target_y) + centroid_y) / 4)
+  }
+  target_x = (maximum workspace_min_x (minimum workspace_max_x target_x))
+  target_y = (maximum workspace_min_y (minimum workspace_max_y target_y))
+  local 'target_dx' (target_x - self_x)
+  local 'target_dy' (target_y - self_y)
+  local 'target_distance' ('[misc:sqrt]' ((target_dx * target_dx) + (target_dy * target_dy)))
+  if (target_distance <= 5) {
+    coverage_state = 'SET'
+  } else {
+    coverage_state = 'MOVE'
+  }
+}
+
+to '_count_active_robots' {
+  local 'count' 0
+  if ('OmniStamp on map') {
+    count = 1
+  }
+  for peer_id 5 {
+    if ('_peer_active' peer_id) {count += 1}
+  }
+  active_count = count
+  return count
+}
+
+to '_inside_half_plane' x y a b c {
+  return (((a * x) + (b * y)) <= c)
+}
+
+to '_peer_active' peer_id {
+  if (or (peer_id == ID) (not ('_valid_robot_id' peer_id))) {return (booleanConstant false)}
+  local 'last_seen' (at peer_id neighbor_time)
+  if (last_seen <= 0) {
+    return (booleanConstant false)
+  }
+  return (((millisOp) - last_seen) < neighbor_timeout_ms)
+}
+
+to '_reset_neighbors' {
+  neighbor_x = ('[data:makeList]' 0 0 0 0 0)
+  neighbor_y = ('[data:makeList]' 0 0 0 0 0)
+  neighbor_time = ('[data:makeList]' 0 0 0 0 0)
+}
+
+to '_valid_robot_id' robot_id {
+  return (and (robot_id >= 1) (robot_id <= 5))
+}
+
+to 'set Voronoi robot ID' robot_id {
+  if ('OmniStamp on map') {return}
+  ID = (maximum 1 (minimum 5 robot_id))
+  sequence_number = 0
+  target_initialized = (booleanConstant false)
+  '_reset_neighbors'
+  displayCharacter ID
+}
+
+to 'set Voronoi running' enabled {
+  coverage_enabled = enabled
+  if (not coverage_enabled) {
+    coverage_state = 'PAUSE'
+    'OmniStamp stop'
+  }
+}
+
+to 'set Voronoi speed' speed {
+  coverage_speed = (maximum 0 (minimum 100 speed))
+}
+
+to 'set Voronoi workspace' min_x max_x min_y max_y {
+  workspace_min_x = (minimum min_x max_x)
+  workspace_max_x = (maximum min_x max_x)
+  workspace_min_y = (minimum min_y max_y)
+  workspace_max_y = (maximum min_y max_y)
+  target_initialized = (booleanConstant false)
+}
+
+script 44 33 {
+whenStarted
+ID = 1
+coverage_enabled = (booleanConstant true)
+workspace_min_x = 30
+workspace_max_x = 570
+workspace_min_y = 30
+workspace_max_y = 570
+coverage_speed = 60
+neighbor_timeout_ms = 800
+centroid_x = 300
+centroid_y = 300
+target_x = 300
+target_y = 300
+target_initialized = (booleanConstant false)
+active_count = 0
+sequence_number = 0
+coverage_state = 'WAIT'
+'_reset_neighbors'
+'[net:ESPNowSetChannel]' 13
+'[net:ESPNowSetGroup]' 212
+displayCharacter ID
+sendBroadcast 'Voronoi broadcast state'
+sendBroadcast 'Voronoi control'
+}
+
+script 394 33 {
+whenButtonPressed 'A'
+if (not ('OmniStamp on map')) {
+  local 'new_id' (ID - 1)
+  if (new_id < 1) {
+    new_id = 5
+  }
+  'set Voronoi robot ID' new_id
+}
+}
+
+script 764 37 {
+whenButtonPressed 'B'
+if (not ('OmniStamp on map')) {
+  local 'new_id' (ID + 1)
+  if (new_id > 5) {
+    new_id = 1
+  }
+  'set Voronoi robot ID' new_id
+}
+}
+
+script 434 443 {
+whenCondition (espNow_receive_pair)
+local 'sender' (espNow_last_number)
+if (and ('_valid_robot_id' sender) (sender != ID)) {
+  local 'parts' ('[data:split]' (espNow_last_string) ',')
+  if (and ((size parts) >= 4) ((at 1 parts) == 'C')) {
+    atPut sender neighbor_x ('[data:convertType]' (at 2 parts) 'number')
+    atPut sender neighbor_y ('[data:convertType]' (at 3 parts) 'number')
+    atPut sender neighbor_time (millisOp)
+  }
+}
+}
+
+script 784 443 {
+whenBroadcastReceived 'Voronoi control'
+forever {
+  '_count_active_robots'
+  if (and coverage_enabled ('OmniStamp on map')) {
+    '_compute_voronoi_target'
+    'OmniStamp track target' target_x target_y coverage_speed
+  } else {
+    coverage_state = 'WAIT'
+    target_initialized = (booleanConstant false)
+    'OmniStamp stop'
+  }
+  waitMillis 200
+}
+}
+
+script 41 764 {
+whenBroadcastReceived 'Voronoi broadcast state'
+waitMillis (random 0 49)
+forever {
+  if (and coverage_enabled ('OmniStamp on map')) {
+    sequence_number += 1
+    local 'payload' ('[data:join]' 'C,' ('OmniStamp position X') ',' ('OmniStamp position Y') ',' sequence_number)
+    espNow_send_pair payload ID
+  }
+  waitMillis 100
+}
+}
+
+
+module 'ESP Now' Comm
+author MicroBlocks
+version 1 3 
+description 'Support for ESP Now peer-to-peer messaging for ESP boards.
+Unencrypted messages are broadcast to all peers within range, so pairing is not necessary and there is no limit to the number of peers.
+
+Delivery is unreliable; messages may be lost, especially when there is a lot of other WiFi and Bluetooth traffic in the 2.4 GHz band. The best channel is one without much traffic.
+
+The "pair" blocks provide functionality similar to the various Radio Libraries with data transported via ESP Now messages.
+
+When using WiFi and ESP Now at the same time, the ESP32 forces ESP Now to use the same channel as WiFi. The ESP8266 allows ESP Now and WiFi to use different channels.
+'
+variables _espNow_lastNumber _espNow_lastString 
+
+  spec ' ' 'espNow_send_pair' 'espNow send pair _ = _' 'str num' 'light' 10
+  spec 'r' 'espNow_receive_pair' 'espNow pair received?'
+  spec 'r' 'espNow_last_number' 'espNow last number'
+  spec 'r' 'espNow_last_string' 'espNow last string'
+  space
+  spec ' ' '[net:ESPNowSetGroup]' 'espNow set group _ (0-255)' 'num' 0
+  spec 'r' '[net:ESPNowGroup]' 'espNow group'
+  space
+  advanced
+  spec ' ' 'espNow_send' 'espNow send raw _' 'str' 'Hello, ESP Now!'
+  spec 'r' '[net:ESPNowReceive]' 'espNow receive raw'
+  space
+  spec ' ' '[net:ESPNowSetChannel]' 'espNow set channel _' 'menu.range:1-13' 1
+  spec 'r' '[net:ESPNowChannel]' 'espNow channel'
+
+to espNow_last_number {
+  return _espNow_lastNumber
+}
+
+to espNow_last_string {
+  return _espNow_lastString
+}
+
+to espNow_receive_pair {
+  comment 'Format of ESP Now "pair" messages:
+	tag: ''NOW'' (3 bytes)
+	separator: |
+	number n as String (variable length)
+	separator: |
+	string data s (variable length)
+Messages that are not in this format are discarded.'
+  local 'msg' ('[net:ESPNowReceive]')
+  if (or ((size msg) < 5) ('NOW' != ('[data:copyFromTo]' msg 1 3))) {
+    return (booleanConstant false)
+  }
+  local 'parts' ('[data:split]' msg '|')
+  if ((size parts) != 3) {
+    return (booleanConstant false)
+  }
+  _espNow_lastNumber = ('[data:convertType]' (at 2 parts) 'number')
+  _espNow_lastString = (at 3 parts)
+  return (booleanConstant true)
+}
+
+to espNow_send msg {
+  comment 'Send an uninterpreted string via ESP Now. Allows users to define their own protocols.'
+  '[net:ESPNowSend]' ('[data:convertType]' msg 'string')
+}
+
+to espNow_send_pair s n {
+  espNow_send ('[data:join]' 'NOW' '|' ('[data:toString]' n) '|' s)
+}
+
+
+module 'LED Display' Output
+author MicroBlocks
+version 1 15 
+choices led_imageMenu heart 'small heart' yes no happy sad confused angry asleep surprised silly fabulous meh 't-shirt' 'roller skate' duck house tortoise butterfly 'stick figure' ghost sword giraffe skull umbrella snake rabbit cow 'quarter note' 'eight note' pitchfork target triangle 'left triangle' 'chess board' diamond 'small diamond' square 'small square' scissors 
+description 'Display primitives for the 5x5 LED display on the BBC micro:bit, Calliope mini and M5Atom Matrix. Boards with TFT displays (such as the Citilab ED1 or the M5Stack family) support these primitives with a simulated "fat pixel" display.
+'
+variables _stop_scrolling_text 
+
+  spec ' ' '[display:mbDisplay]' 'display _' 'microbitDisplay' 15237440
+  spec ' ' 'led_displayImage' 'display image _ : x _ y _' 'menu.led_imageMenu num num' 'happy' 1 1
+  spec ' ' '[display:mbDisplayOff]' 'clear display'
+  space
+  spec ' ' '[display:mbPlot]' 'plot x _ y _' 'num num' 3 3
+  spec ' ' '[display:mbUnplot]' 'unplot x _ y _' 'num num' 3 3
+  space
+  spec ' ' 'displayCharacter' 'display character _' 'str' 'A'
+  spec ' ' 'scroll_text' 'scroll text _ : pausing _ ms' 'str num' 'HELLO ROSA!' 100
+  spec ' ' 'stopScrollingText' 'stop scrolling'
+  advanced
+  spec ' ' 'set display color' 'set display color _' 'color'
+  spec 'r' 'led_image' 'LED image #BR# _' 'microbitDisplay' 15237440
+  space
+  spec 'r' '_led_namedImage' '_led_namedImage _' 'menu.led_imageMenu' 'happy'
+  spec 'r' '_led_imageData' '_led_imageData'
+
+to '_led_imageData' {
+  return 'heart:4685802,small heart:145728,yes:2269696,no:18157905,happy:15237440,sad:18284864,confused:22348096,angry:23036241,asleep:459616,surprised:4526090,silly:25984017,fabulous:15008639,meh:2236443,t-shirt:15154043,roller skate:11534104,duck:489702,house:10976708,tortoise:359872,butterfly:29332475,stick figure:18158564,ghost:23068334,sword:4657284,giraffe:10946627,skull:15171246,umbrella:6460398,snake:469859,rabbit:16104613,cow:4685361,quarter note:7573636,eight note:7590276,pitchfork:4357813,target:4681156,triangle:1026176,left triangle:32805985,chess board:11184810,diamond:4539716,small diamond:141440,square:33080895,small square:469440,scissors:20287859,'
+}
+
+to '_led_namedImage' name {
+  local 'data' ('_led_imageData')
+  local 'i' ('[data:find]' name data)
+  if (i == -1) {
+    comment 'Name not found'
+    return 0
+  }
+  local 'start' (('[data:find]' ':' data i) + 1)
+  local 'end' (('[data:find]' ',' data i) - 1)
+  return ('[data:convertType]' ('[data:copyFromTo]' data start end) 'number')
+}
+
+to displayCharacter s {
+  s = ('[data:join]' '' s)
+  if ((size s) == 0) {
+    '[display:mbDisplayOff]'
+    return 0
+  }
+  '[display:mbDrawShape]' ('[display:mbShapeForLetter]' (at 1 s)) 1 1
+}
+
+to led_displayImage imageName optionalX optionalY {
+  local 'image' imageName
+  if (isType image 'string') {
+    image = ('_led_namedImage' imageName)
+  }
+  '[display:mbDrawShape]' image (argOrDefault 2 1) (argOrDefault 3 1)
+}
+
+to led_image twentyFiveBitInt {
+  comment 'An LED image is a 25-bit integer'
+  return twentyFiveBitInt
+}
+
+to scroll_text text optionalDelay {
+  text = ('[data:join]' '' text)
+  local 'delay' 100
+  if ((pushArgCount) > 1) {
+    delay = optionalDelay
+  }
+  _stop_scrolling_text = (booleanConstant false)
+  if ('Pico:ed' == (boardType)) {
+    for position (((size text) * 6) + 18) {
+      if _stop_scrolling_text {return 0}
+      '[display:mbDisplayOff]'
+      '[tft:text]' text (17 - position) 0 (colorSwatch 125 125 125 255) 1 true
+      waitMillis (delay / 2)
+    }
+  } (or ('KidsIOT' == (boardType)) ('CodingBox' == (boardType))) {
+    for position (((size text) * 6) + 21) {
+      if _stop_scrolling_text {return 0}
+      '[tft:deferUpdates]'
+      '[tft:clear]'
+      '[tft:text]' text (128 - (6 * position)) 6 (colorSwatch 255 255 255 255) 6 false
+      '[tft:resumeUpdates]'
+      waitMillis (delay / 8)
+    }
+  } else {
+    for position (((size text) * 6) + 6) {
+      if _stop_scrolling_text {return 0}
+      for i (size text) {
+        '[display:mbDrawShape]' ('[display:mbShapeForLetter]' ('[data:unicodeAt]' i text)) (((i * 6) + 2) - position) 1
+      }
+      waitMillis delay
+    }
+  }
+}
+
+to 'set display color' color {
+  '[display:mbSetColor]' color
+}
+
+to stopScrollingText {
+  _stop_scrolling_text = (booleanConstant true)
+  waitMillis 10
+  '[display:mbDisplayOff]'
+}
+
+
+module OmniStamp_v4
+author 'Liang Shuai'
+version 0 50 
+tags 'omnistamp robot omni wheel' 
+description 'OmniStamp three-wheel omnidirectional robot library.
+
+Map coordinates use +X to the right and +Y downward. Wheel speed ranges
+from -100 to 100. Positive turn speed increases the OID heading angle.
+Wheel names are top, bottom-left, and bottom-right when viewed from above.
+
+PWM dead-zone compensation is adjustable from 0 to 100 percent and defaults
+to 15 percent. Nonzero wheel commands are mapped from the configured minimum
+PWM to full scale, while a zero wheel command always stops the motor.
+
+V3.1 adds non-blocking target tracking.
+V4 adds cross-track error correction and low-speed approach to move-to-target.
+V4.1 delays deceleration until the final 50 map units and keeps enough torque.
+V4.2 adds adjustable PWM dead-zone compensation.
+V5 adds per-wheel gain calibration, wheel-command deadband, slew-rate limiting,
+smooth direction reversal, and persistent non-blocking target tracking.
+'
+variables _omni_top_sign _omni_bottom_left_sign _omni_bottom_right_sign _omni_motion_active _omni_tracking_enabled _omni_track_task_started _omni_target_x _omni_target_y _omni_target_speed _omni_track_hold_angle _omni_pwm_dead_zone _omni_motor_control_initialized _omni_top_gain _omni_bottom_left_gain _omni_bottom_right_gain _omni_wheel_deadband _omni_wheel_slew _omni_last_top _omni_last_bottom_left _omni_last_bottom_right 
+
+  spec 'r' 'OmniStamp position X' 'position X'
+  spec 'r' 'OmniStamp position Y' 'position Y'
+  spec 'r' 'OmniStamp direction' 'direction'
+  spec 'r' 'OmniStamp on map' 'on map'
+  space
+  spec ' ' 'OmniStamp set wheel speeds' 'set wheel speeds top _ bottom-left _ bottom-right _ (-100 to 100)' 'num num num' 0 0 0
+  spec ' ' 'OmniStamp stop' 'stop wheels'
+  spec ' ' 'OmniStamp brake' 'brake wheels'
+  spec ' ' 'OmniStamp set PWM dead zone' 'set PWM dead-zone compensation _ percent (0 to 100)' 'num' 15
+  spec ' ' 'OmniStamp set wheel gains' 'set wheel gains top _ bottom-left _ bottom-right _ percent' 'num num num' 100 100 100
+  spec ' ' 'OmniStamp set wheel deadband' 'set wheel-command deadband _ (0 to 10)' 'num' 2
+  spec ' ' 'OmniStamp set motion smoothing' 'set max wheel-command change _ per control cycle (1 to 100)' 'num' 8
+  space
+  spec ' ' 'OmniStamp move robot' 'move robot forward _ right _ turn _ (-100 to 100)' 'num num num' 50 0 0
+  spec ' ' 'OmniStamp move on map' 'move on map X speed _ Y speed _ turn _' 'num num num' 50 0 0
+  spec ' ' 'OmniStamp move along X' 'move along map X at speed _' 'num' 50
+  spec ' ' 'OmniStamp move along Y' 'move along map Y at speed _' 'num' 50
+  space
+  spec ' ' 'OmniStamp move to' 'move to X _ Y _ at speed _' 'num num num' 100 100 50
+  spec ' ' 'OmniStamp track target' 'track target X _ Y _ at speed _' 'num num num' 100 100 50
+  space
+  spec ' ' '_omni_set_wheels' '_omni_set_wheels top _ bottom-left _ bottom-right _' 'num num num' 0 0 0
+  spec ' ' '_omni_set_motor' '_omni_set_motor pin 1 _ pin 2 _ speed _' 'num num num' 0 0 0
+  spec ' ' '_omni_drive_wheels' '_omni_drive_wheels top _ bottom-left _ bottom-right _' 'num num num' 0 0 0
+  spec ' ' '_omni_apply_motion' '_omni_apply_motion forward _ right _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_apply_motion_smooth' '_omni_apply_motion_smooth forward _ right _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_move_on_map' '_omni_move_on_map X _ Y _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_move_on_map_smooth' '_omni_move_on_map_smooth X _ Y _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_track_target' '_omni_track_target'
+  spec ' ' '_omni_init_motor_control' '_omni_init_motor_control'
+  spec 'r' '_omni_angle_error' '_omni_angle_error target _' 'num' 0
+  spec 'r' '_omni_heading_command' '_omni_heading_command target _' 'num' 0
+  spec 'r' '_omni_slew' '_omni_slew current _ target _ step _' 'num num num' 0 0 8
+  spec 'r' '_omni_limit' '_omni_limit _ to _' 'num num' 0 100
+
+to 'OmniStamp brake' {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  digitalWriteOp 14 true
+  digitalWriteOp 13 true
+  digitalWriteOp 41 true
+  digitalWriteOp 42 true
+  digitalWriteOp 1 true
+  digitalWriteOp 2 true
+  waitMillis 100
+  digitalWriteOp 14 false
+  digitalWriteOp 13 false
+  digitalWriteOp 41 false
+  digitalWriteOp 42 false
+  digitalWriteOp 1 false
+  digitalWriteOp 2 false
+  _omni_last_top = 0
+  _omni_last_bottom_left = 0
+  _omni_last_bottom_right = 0
+}
+
+to 'OmniStamp direction' {
+  return (callCustomReporter '[sensors:position_yaw]')
+}
+
+to 'OmniStamp move along X' speed {
+  'OmniStamp move on map' speed 0 0
+}
+
+to 'OmniStamp move along Y' speed {
+  'OmniStamp move on map' 0 speed 0
+}
+
+to 'OmniStamp move on map' x_speed y_speed turn {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_move_on_map' x_speed y_speed turn
+}
+
+to 'OmniStamp move robot' forward right turn {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_apply_motion' forward right turn
+}
+
+to 'OmniStamp move to' target_x target_y speed {
+  _omni_tracking_enabled = false
+  _omni_motion_active = true
+  speed = (absoluteValue speed)
+  speed = (maximum 30 (minimum speed 100))
+  local 'start_time' (millisOp)
+  local 'hold_angle' ('OmniStamp direction')
+  local 'start_x' ('OmniStamp position X')
+  local 'start_y' ('OmniStamp position Y')
+  local 'path_dx' (target_x - start_x)
+  local 'path_dy' (target_y - start_y)
+  local 'path_length' ('[misc:sqrt]' ((path_dx * path_dx) + (path_dy * path_dy)))
+  local 'unit_x' ((path_dx * 1000) / (maximum path_length 1))
+  local 'unit_y' ((path_dy * 1000) / (maximum path_length 1))
+  local 'normal_x' (0 - unit_y)
+  local 'normal_y' unit_x
+  forever {
+    if (not _omni_motion_active) {exitLoop}
+    if (not ('OmniStamp on map')) {
+      'OmniStamp stop'
+      exitLoop
+    }
+    local 'current_x' ('OmniStamp position X')
+    local 'current_y' ('OmniStamp position Y')
+    local 'dx' (target_x - current_x)
+    local 'dy' (target_y - current_y)
+    local 'distance' ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+    if (distance <= 3) {
+      'OmniStamp brake'
+      exitLoop
+    }
+    if (((millisOp) - start_time) > 15000) {
+      'OmniStamp stop'
+      exitLoop
+    }
+    comment 'Keep the requested speed until the last 50 map units. Inside the
+approach zone, reduce speed while PWM dead-zone compensation preserves torque.'
+    local 'move_speed' speed
+    if (distance < 50) {
+      move_speed = (maximum 12 distance)
+      move_speed = (minimum move_speed speed)
+    }
+    comment 'Signed distance from the fixed start-to-target line. The normal
+vector is scaled by 1000 to preserve precision in integer arithmetic.'
+    local 'cross_error' ((((current_x - start_x) * normal_x) + ((current_y - start_y) * normal_y)) / 1000)
+    local 'cross_correction' ('_omni_limit' (cross_error * 2) 20)
+    comment 'Move toward the endpoint and add a perpendicular correction that
+pulls the robot back toward the original straight path.'
+    local 'x_speed' (((dx * move_speed) / (maximum distance 1)) - ((normal_x * cross_correction) / 1000))
+    local 'y_speed' (((dy * move_speed) / (maximum distance 1)) - ((normal_y * cross_correction) / 1000))
+    local 'turn_speed' ('_omni_heading_command' hold_angle)
+    '_omni_move_on_map_smooth' x_speed y_speed turn_speed
+    waitMillis 20
+  }
+  _omni_motion_active = false
+}
+
+to 'OmniStamp on map' {
+  return (callCustomReporter '[sensors:cube_status]')
+}
+
+to 'OmniStamp position X' {
+  return ((callCustomReporter '[sensors:position_x]') / 64)
+}
+
+to 'OmniStamp position Y' {
+  return ((callCustomReporter '[sensors:position_y]') / 64)
+}
+
+to 'OmniStamp set PWM dead zone' percent {
+  '_omni_init_motor_control'
+  _omni_pwm_dead_zone = (maximum 0 (minimum percent 100))
+}
+
+to 'OmniStamp set motion smoothing' value {
+  '_omni_init_motor_control'
+  _omni_wheel_slew = (maximum 1 (minimum value 100))
+}
+
+to 'OmniStamp set wheel deadband' value {
+  '_omni_init_motor_control'
+  _omni_wheel_deadband = (maximum 0 (minimum value 10))
+}
+
+to 'OmniStamp set wheel gains' top bottom_left bottom_right {
+  '_omni_init_motor_control'
+  _omni_top_gain = (maximum 50 (minimum top 150))
+  _omni_bottom_left_gain = (maximum 50 (minimum bottom_left 150))
+  _omni_bottom_right_gain = (maximum 50 (minimum bottom_right 150))
+}
+
+to 'OmniStamp set wheel speeds' top bottom_left bottom_right {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to 'OmniStamp stop' {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_set_wheels' 0 0 0
+}
+
+to 'OmniStamp track target' target_x target_y speed {
+  _omni_motion_active = false
+  if (not _omni_tracking_enabled) {
+    _omni_track_hold_angle = ('OmniStamp direction')
+  }
+  _omni_target_x = target_x
+  _omni_target_y = target_y
+  _omni_target_speed = (maximum 0 (minimum (absoluteValue speed) 100))
+  _omni_tracking_enabled = (booleanConstant true)
+  if (not _omni_track_task_started) {
+    _omni_track_task_started = (booleanConstant true)
+    sendBroadcast '_omni_track_target'
+  }
+}
+
+to '_omni_angle_error' target {
+  local 'error' ((target % 360) - ('OmniStamp direction'))
+  if (error > 180) {
+    error += -360
+  } (error < -180) {
+    error += 360
+  }
+  return error
+}
+
+to '_omni_apply_motion' forward right turn {
+  forward = ('_omni_limit' forward 100)
+  right = ('_omni_limit' right 100)
+  turn = ('_omni_limit' turn 100)
+  local 'top' ((0 - right) + turn)
+  local 'bottom_left' ((((-866 * forward) + (500 * right)) / 1000) + turn)
+  local 'bottom_right' ((((866 * forward) + (500 * right)) / 1000) + turn)
+  local 'largest' (maximum (absoluteValue top) (maximum (absoluteValue bottom_left) (absoluteValue bottom_right)))
+  if (largest > 100) {
+    top = ((top * 100) / largest)
+    bottom_left = ((bottom_left * 100) / largest)
+    bottom_right = ((bottom_right * 100) / largest)
+  }
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to '_omni_apply_motion_smooth' forward right turn {
+  forward = ('_omni_limit' forward 100)
+  right = ('_omni_limit' right 100)
+  turn = ('_omni_limit' turn 100)
+  local 'top' ((0 - right) + turn)
+  local 'bottom_left' ((((-866 * forward) + (500 * right)) / 1000) + turn)
+  local 'bottom_right' ((((866 * forward) + (500 * right)) / 1000) + turn)
+  local 'largest' (maximum (absoluteValue top) (maximum (absoluteValue bottom_left) (absoluteValue bottom_right)))
+  if (largest > 100) {
+    top = ((top * 100) / largest)
+    bottom_left = ((bottom_left * 100) / largest)
+    bottom_right = ((bottom_right * 100) / largest)
+  }
+  '_omni_drive_wheels' top bottom_left bottom_right
+}
+
+to '_omni_drive_wheels' top bottom_left bottom_right {
+  '_omni_init_motor_control'
+  top = ('_omni_limit' top 100)
+  bottom_left = ('_omni_limit' bottom_left 100)
+  bottom_right = ('_omni_limit' bottom_right 100)
+  if ((absoluteValue top) <= _omni_wheel_deadband) {
+    top = 0
+  }
+  if ((absoluteValue bottom_left) <= _omni_wheel_deadband) {
+    bottom_left = 0
+  }
+  if ((absoluteValue bottom_right) <= _omni_wheel_deadband) {
+    bottom_right = 0
+  }
+  top = ('_omni_slew' _omni_last_top top _omni_wheel_slew)
+  bottom_left = ('_omni_slew' _omni_last_bottom_left bottom_left _omni_wheel_slew)
+  bottom_right = ('_omni_slew' _omni_last_bottom_right bottom_right _omni_wheel_slew)
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to '_omni_heading_command' target {
+  local 'error' ('_omni_angle_error' target)
+  if ((absoluteValue error) <= 1) {
+    return 0
+  }
+  return ('_omni_limit' (error / 2) 15)
+}
+
+to '_omni_init_motor_control' {
+  if (not _omni_motor_control_initialized) {
+    _omni_pwm_dead_zone = 15
+    _omni_top_gain = 100
+    _omni_bottom_left_gain = 100
+    _omni_bottom_right_gain = 100
+    _omni_wheel_deadband = 2
+    _omni_wheel_slew = 8
+    _omni_last_top = 0
+    _omni_last_bottom_left = 0
+    _omni_last_bottom_right = 0
+    _omni_motor_control_initialized = (booleanConstant true)
+  }
+}
+
+to '_omni_limit' value limit {
+  return (maximum (0 - limit) (minimum value limit))
+}
+
+to '_omni_move_on_map' x_speed y_speed turn {
+  local 'yaw_x100' (('OmniStamp direction') * 100)
+  local 'sin_yaw' ('[misc:sin]' yaw_x100)
+  local 'cos_yaw' ('[misc:sin]' (yaw_x100 + 9000))
+  local 'forward' (((x_speed * sin_yaw) + (y_speed * cos_yaw)) >> 14)
+  local 'right' ((((0 - x_speed) * cos_yaw) + (y_speed * sin_yaw)) >> 14)
+  '_omni_apply_motion' forward right turn
+}
+
+to '_omni_move_on_map_smooth' x_speed y_speed turn {
+  local 'yaw_x100' (('OmniStamp direction') * 100)
+  local 'sin_yaw' ('[misc:sin]' yaw_x100)
+  local 'cos_yaw' ('[misc:sin]' (yaw_x100 + 9000))
+  local 'forward' (((x_speed * sin_yaw) + (y_speed * cos_yaw)) >> 14)
+  local 'right' ((((0 - x_speed) * cos_yaw) + (y_speed * sin_yaw)) >> 14)
+  '_omni_apply_motion_smooth' forward right turn
+}
+
+to '_omni_set_motor' pin1 pin2 speed {
+  '_omni_init_motor_control'
+  speed = ('_omni_limit' speed 100)
+  local 'magnitude' (absoluteValue speed)
+  local 'minimum_pwm' ((_omni_pwm_dead_zone * 1023) / 100)
+  local 'pwm' 0
+  if (magnitude > 0) {
+    pwm = (minimum_pwm + (((1023 - minimum_pwm) * magnitude) / 100))
+  }
+  if (speed > 0) {
+    digitalWriteOp pin2 false
+    analogWriteOp pin1 pwm
+  } (speed < 0) {
+    digitalWriteOp pin1 false
+    analogWriteOp pin2 pwm
+  } else {
+    digitalWriteOp pin1 false
+    digitalWriteOp pin2 false
+  }
+}
+
+to '_omni_set_wheels' top bottom_left bottom_right {
+  '_omni_init_motor_control'
+  if (_omni_top_sign == 0) {
+    _omni_top_sign = 1
+    _omni_bottom_left_sign = 1
+    _omni_bottom_right_sign = 1
+  }
+  top = ('_omni_limit' top 100)
+  bottom_left = ('_omni_limit' bottom_left 100)
+  bottom_right = ('_omni_limit' bottom_right 100)
+  _omni_last_top = top
+  _omni_last_bottom_left = bottom_left
+  _omni_last_bottom_right = bottom_right
+  local 'calibrated_top' ('_omni_limit' ((top * _omni_top_gain) / 100) 100)
+  local 'calibrated_bottom_left' ('_omni_limit' ((bottom_left * _omni_bottom_left_gain) / 100) 100)
+  local 'calibrated_bottom_right' ('_omni_limit' ((bottom_right * _omni_bottom_right_gain) / 100) 100)
+  '_omni_set_motor' 41 42 (calibrated_top * _omni_top_sign)
+  '_omni_set_motor' 1 2 (calibrated_bottom_left * _omni_bottom_left_sign)
+  '_omni_set_motor' 14 13 (calibrated_bottom_right * _omni_bottom_right_sign)
+}
+
+to '_omni_slew' current target step {
+  comment 'Ramp to zero before reversing direction to avoid an abrupt H-bridge reversal.'
+  if (current > 0) {
+    if (target < 0) {target = 0}
+  } (current < 0) {
+    if (target > 0) {target = 0}
+  }
+  local 'delta' (target - current)
+  if (delta > step) {
+    return (current + step)
+  } (delta < (0 - step)) {
+    return (current - step)
+  }
+  return target
+}
+
+to '_omni_track_target' {
+  forever {
+    if _omni_tracking_enabled {if ('OmniStamp on map') {
+      local 'dx' (_omni_target_x - ('OmniStamp position X'))
+      local 'dy' (_omni_target_y - ('OmniStamp position Y'))
+      local 'distance' ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+      if (or (distance <= 3) (_omni_target_speed == 0)) {
+        '_omni_set_wheels' 0 0 0
+      } else {
+        local 'move_speed' (minimum _omni_target_speed (maximum 8 (distance * 2)))
+        local 'x_speed' ((dx * move_speed) / (maximum distance 1))
+        local 'y_speed' ((dy * move_speed) / (maximum distance 1))
+        local 'turn_speed' ('_omni_heading_command' _omni_track_hold_angle)
+        '_omni_move_on_map_smooth' x_speed y_speed turn_speed
+      }
+    } else {
+      '_omni_set_wheels' 0 0 0
+    }}
+    waitMillis 20
+  }
+}

@@ -1,0 +1,3 @@
+trajectory,reference_geometry,duration_s,valid_oid_samples,mean_speed_mm_s,path_rmse_units,path_rmse_mm,path_mae_units,path_mae_mm,max_abs_error_units,max_abs_error_mm,heading_rmse_deg
+Circle,"center=(300,300); radius=150 units",33.7,1559,118,2.08,2.83,1.66,2.25,6.75,9.19,4.2
+Square,"corners=(150,150);(450,150);(450,450);(150,450)",39.3,1822,125,2.78,3.78,2.32,3.15,7.64,10.39,3.6

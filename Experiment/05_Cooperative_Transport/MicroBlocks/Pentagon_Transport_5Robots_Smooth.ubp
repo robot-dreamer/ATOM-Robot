@@ -1,0 +1,976 @@
+module main
+author unknown
+version 1 0
+description 'Smooth five-robot cage transport using a continuous rounded-rectangle reference and distributed formation-velocity correction.'
+variables ID running transport_round phase ready formation_center_x formation_center_y path_stage arc_angle_x100 path_velocity_x path_velocity_y path_speed center_step target_x target_y offset_x offset_y offset_distance command_speed staging_distance contact_distance transport_distance phase_start_time command_seq transport_hold_angle formation_gain max_correction recovery_distance max_motion_speed final_tolerance tracking_error slot_error_x slot_error_y smooth_move_x smooth_move_y neighbor_round neighbor_phase neighbor_ready neighbor_time last_run_time rx_sender rx_round rx_phase rx_ready rx_center_x rx_center_y rx_path_stage rx_command_seq rx_running rx_velocity_x rx_velocity_y
+
+  spec ' ' 'start smooth pentagon transport' 'start smooth pentagon transport'
+  spec ' ' 'stop smooth pentagon transport' 'stop smooth pentagon transport'
+  spec 'r' 'all smooth transport robots ready' 'all smooth transport robots ready?'
+  spec ' ' 'set smooth pentagon offset' 'set smooth pentagon offset distance _' 'num' 40
+  spec ' ' 'update approach or final target' 'update approach or final target'
+  spec ' ' 'update smooth reference path' 'update smooth reference path'
+  spec ' ' 'update first smooth corner' 'update first smooth corner'
+  spec ' ' 'update second smooth corner' 'update second smooth corner'
+  spec ' ' 'update smooth formation motion' 'update smooth formation motion'
+  spec ' ' 'calculate smooth pentagon velocity' 'calculate smooth pentagon velocity'
+  spec ' ' 'apply pentagon boundary safety' 'apply pentagon boundary safety'
+  spec ' ' 'handle smooth transport state' 'handle smooth transport state sender _ payload _' 'num str' 1 ''
+  spec ' ' 'apply smooth leader state' 'apply smooth leader state'
+  space
+  spec 'r' 'smooth transport phase' 'smooth transport phase'
+  spec 'r' 'smooth path stage' 'smooth path stage'
+  spec 'r' 'smooth formation center X' 'smooth formation center X'
+  spec 'r' 'smooth formation center Y' 'smooth formation center Y'
+  spec 'r' 'smooth target error' 'smooth target error'
+  spec 'r' 'smooth target X' 'smooth target X'
+  spec 'r' 'smooth target Y' 'smooth target Y'
+
+to 'all smooth transport robots ready' {
+  if (ready != 1) {return (booleanConstant false)}
+  for robot_id 5 {
+    if (robot_id != ID) {
+      if ((at robot_id neighbor_time) == 0) {return (booleanConstant false)}
+      if (((millisOp) - (at robot_id neighbor_time)) >= 400) {return (booleanConstant false)}
+      if ((at robot_id neighbor_round) != transport_round) {return (booleanConstant false)}
+      if ((at robot_id neighbor_phase) != phase) {return (booleanConstant false)}
+      if ((at robot_id neighbor_ready) != 1) {return (booleanConstant false)}
+    }
+  }
+  return (booleanConstant true)
+}
+
+to 'apply smooth leader state' {
+  if (and (rx_sender == 1) (ID != 1)) {
+    if (rx_round > transport_round) {
+      transport_round = rx_round
+      if (and (rx_phase == 3) (phase != 3)) {
+        transport_hold_angle = ('OmniStamp direction')
+      }
+      phase = rx_phase
+      ready = 0
+      formation_center_x = (maximum 90 (minimum rx_center_x 510))
+      formation_center_y = (maximum 90 (minimum rx_center_y 510))
+      path_velocity_x = rx_velocity_x
+      path_velocity_y = rx_velocity_y
+      path_stage = rx_path_stage
+      command_seq = rx_command_seq
+      running = rx_running
+      last_run_time = (millisOp)
+      if (running == 0) {'OmniStamp stop'}
+    } (and (and (rx_round == transport_round) (rx_phase == 0)) (rx_running == 0)) {
+      running = 0
+      phase = 0
+      ready = 0
+      'OmniStamp stop'
+    } (and (rx_round == transport_round) (or (rx_phase > phase) (and (rx_phase == phase) (rx_command_seq >= command_seq)))) {
+      if (and (rx_phase == 3) (phase != 3)) {
+        transport_hold_angle = ('OmniStamp direction')
+      }
+      phase = rx_phase
+      formation_center_x = (maximum 90 (minimum rx_center_x 510))
+      formation_center_y = (maximum 90 (minimum rx_center_y 510))
+      path_velocity_x = rx_velocity_x
+      path_velocity_y = rx_velocity_y
+      path_stage = rx_path_stage
+      command_seq = rx_command_seq
+      running = rx_running
+      if (running == 0) {
+        ready = 0
+        'OmniStamp stop'
+      }
+    }
+  }
+}
+
+to 'handle smooth transport state' sender payload {
+  if (or (sender < 1) (or (sender > 5) (sender == ID))) {return}
+  local 'parts' ('[data:split]' payload ',')
+  if ((size parts) < 10) {return}
+  rx_sender = sender
+  rx_round = ('[data:convertType]' (at 1 parts) 'number')
+  rx_phase = ('[data:convertType]' (at 2 parts) 'number')
+  rx_ready = ('[data:convertType]' (at 3 parts) 'number')
+  rx_center_x = ('[data:convertType]' (at 4 parts) 'number')
+  rx_center_y = ('[data:convertType]' (at 5 parts) 'number')
+  rx_velocity_x = ('[data:convertType]' (at 6 parts) 'number')
+  rx_velocity_y = ('[data:convertType]' (at 7 parts) 'number')
+  rx_path_stage = ('[data:convertType]' (at 8 parts) 'number')
+  rx_command_seq = ('[data:convertType]' (at 9 parts) 'number')
+  rx_running = ('[data:convertType]' (at 10 parts) 'number')
+  atPut rx_sender neighbor_round rx_round
+  atPut rx_sender neighbor_phase rx_phase
+  atPut rx_sender neighbor_ready rx_ready
+  atPut rx_sender neighbor_time (millisOp)
+  'apply smooth leader state'
+}
+
+to 'set smooth pentagon offset' distance {
+  if (ID == 1) {
+    offset_x = distance
+    offset_y = 0
+  } (ID == 2) {
+    offset_x = ((31 * distance) / 100)
+    offset_y = ((95 * distance) / 100)
+  } (ID == 3) {
+    offset_x = (0 - ((81 * distance) / 100))
+    offset_y = ((59 * distance) / 100)
+  } (ID == 4) {
+    offset_x = (0 - ((81 * distance) / 100))
+    offset_y = (0 - ((59 * distance) / 100))
+  } else {
+    offset_x = ((31 * distance) / 100)
+    offset_y = (0 - ((95 * distance) / 100))
+  }
+}
+
+to 'smooth formation center X' {
+  return formation_center_x
+}
+
+to 'smooth formation center Y' {
+  return formation_center_y
+}
+
+to 'smooth path stage' {
+  return path_stage
+}
+
+to 'smooth target error' {
+  return tracking_error
+}
+
+to 'smooth target X' {
+  return target_x
+}
+
+to 'smooth target Y' {
+  return target_y
+}
+
+to 'smooth transport phase' {
+  return phase
+}
+
+to 'start smooth pentagon transport' {
+  transport_round += 1
+  running = 1
+  phase = 1
+  ready = 0
+  formation_center_x = 120
+  formation_center_y = 120
+  path_velocity_x = 0
+  path_velocity_y = 0
+  path_stage = 0
+  command_seq = 0
+  displayCharacter ID
+}
+
+to 'stop smooth pentagon transport' {
+  running = 0
+  phase = 0
+  ready = 0
+  path_velocity_x = 0
+  path_velocity_y = 0
+  'OmniStamp stop'
+  displayCharacter ID
+}
+
+to 'update approach or final target' {
+  if (phase == 1) {
+    offset_distance = staging_distance
+    command_speed = 75
+  } (phase == 2) {
+    offset_distance = contact_distance
+    command_speed = 55
+  } else {
+    offset_distance = transport_distance
+    command_speed = 70
+  }
+  'set smooth pentagon offset' offset_distance
+  target_x = (maximum 30 (minimum (formation_center_x + offset_x) 570))
+  target_y = (maximum 30 (minimum (formation_center_y + offset_y) 570))
+  local 'dx' (target_x - ('OmniStamp position X'))
+  local 'dy' (target_y - ('OmniStamp position Y'))
+  tracking_error = ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+  ready = 0
+  if (and (phase == 1) (tracking_error <= 7)) {
+    ready = 1
+    command_speed = 0
+  }
+  if (and (phase == 4) (tracking_error <= final_tolerance)) {
+    ready = 1
+    command_speed = 0
+  }
+}
+
+to 'update smooth formation motion' {
+  if (and (ID != 1) (or ((at 1 neighbor_time) == 0) (((millisOp) - (at 1 neighbor_time)) >= 400))) {
+    'OmniStamp stop'
+    return
+  }
+  'set smooth pentagon offset' transport_distance
+  target_x = (maximum 30 (minimum (formation_center_x + offset_x) 570))
+  target_y = (maximum 30 (minimum (formation_center_y + offset_y) 570))
+  slot_error_x = (target_x - ('OmniStamp position X'))
+  slot_error_y = (target_y - ('OmniStamp position Y'))
+  tracking_error = ('[misc:sqrt]' ((slot_error_x * slot_error_x) + (slot_error_y * slot_error_y)))
+  'calculate smooth pentagon velocity'
+  'apply pentagon boundary safety'
+  local 'turn_speed' ('_omni_limit' ('_omni_angle_error' transport_hold_angle) 20)
+  ready = 0
+  'OmniStamp move on map' smooth_move_x smooth_move_y turn_speed
+}
+
+to 'calculate smooth pentagon velocity' {
+  smooth_move_x = 0
+  smooth_move_y = 0
+  if (tracking_error > recovery_distance) {
+    smooth_move_x = ((slot_error_x * max_motion_speed) / (maximum 1 tracking_error))
+    smooth_move_y = ((slot_error_y * max_motion_speed) / (maximum 1 tracking_error))
+  } else {
+    local 'correction_x' ('_omni_limit' (slot_error_x * formation_gain) max_correction)
+    local 'correction_y' ('_omni_limit' (slot_error_y * formation_gain) max_correction)
+    smooth_move_x = (path_velocity_x + correction_x)
+    smooth_move_y = (path_velocity_y + correction_y)
+    local 'move_length' ('[misc:sqrt]' ((smooth_move_x * smooth_move_x) + (smooth_move_y * smooth_move_y)))
+    if (move_length > max_motion_speed) {
+      smooth_move_x = ((smooth_move_x * max_motion_speed) / move_length)
+      smooth_move_y = ((smooth_move_y * max_motion_speed) / move_length)
+    }
+  }
+}
+
+to 'apply pentagon boundary safety' {
+  local 'current_x' ('OmniStamp position X')
+  local 'current_y' ('OmniStamp position Y')
+  if (and (current_x >= 570) (smooth_move_x > 0)) {smooth_move_x = 0}
+  if (and (current_x <= 30) (smooth_move_x < 0)) {smooth_move_x = 0}
+  if (and (current_y >= 570) (smooth_move_y > 0)) {smooth_move_y = 0}
+  if (and (current_y <= 30) (smooth_move_y < 0)) {smooth_move_y = 0}
+}
+
+to 'update first smooth corner' {
+  arc_angle_x100 += 286
+  if (arc_angle_x100 >= 0) {
+    arc_angle_x100 = 0
+    path_stage = 3
+  }
+  local 'sin_angle' ('[misc:sin]' arc_angle_x100)
+  local 'cos_angle' ('[misc:sin]' (arc_angle_x100 + 9000))
+  formation_center_x = (440 + ((40 * cos_angle) / 16384))
+  formation_center_y = (160 + ((40 * sin_angle) / 16384))
+  path_velocity_x = ((0 - (path_speed * sin_angle)) / 16384)
+  path_velocity_y = ((path_speed * cos_angle) / 16384)
+}
+
+to 'update second smooth corner' {
+  arc_angle_x100 += 286
+  if (arc_angle_x100 >= 9000) {
+    arc_angle_x100 = 9000
+    path_stage = 5
+  }
+  local 'sin_angle' ('[misc:sin]' arc_angle_x100)
+  local 'cos_angle' ('[misc:sin]' (arc_angle_x100 + 9000))
+  formation_center_x = (440 + ((40 * cos_angle) / 16384))
+  formation_center_y = (440 + ((40 * sin_angle) / 16384))
+  path_velocity_x = ((0 - (path_speed * sin_angle)) / 16384)
+  path_velocity_y = ((path_speed * cos_angle) / 16384)
+}
+
+to 'update smooth reference path' {
+  if (path_stage == 1) {
+    path_velocity_x = path_speed
+    path_velocity_y = 0
+    formation_center_x += center_step
+    if (formation_center_x >= 440) {
+      formation_center_x = 440
+      formation_center_y = 120
+      arc_angle_x100 = -9000
+      path_stage = 2
+    }
+  } (path_stage == 2) {
+    'update first smooth corner'
+  } (path_stage == 3) {
+    path_velocity_x = 0
+    path_velocity_y = path_speed
+    formation_center_y += center_step
+    if (formation_center_y >= 440) {
+      formation_center_x = 480
+      formation_center_y = 440
+      arc_angle_x100 = 0
+      path_stage = 4
+    }
+  } (path_stage == 4) {
+    'update second smooth corner'
+  } (path_stage == 5) {
+    path_velocity_x = (0 - path_speed)
+    path_velocity_y = 0
+    formation_center_x += (0 - center_step)
+    if (formation_center_x <= 120) {
+      formation_center_x = 120
+      formation_center_y = 480
+      path_velocity_x = 0
+      path_velocity_y = 0
+      path_stage = 6
+      phase = 4
+      ready = 0
+    }
+  }
+  command_seq += 1
+}
+
+script 40 33 {
+whenStarted
+ID = 1
+running = 0
+transport_round = 0
+phase = 0
+ready = 0
+formation_center_x = 120
+formation_center_y = 120
+path_stage = 0
+arc_angle_x100 = -9000
+path_velocity_x = 0
+path_velocity_y = 0
+path_speed = 50
+center_step = 2
+target_x = 0
+target_y = 0
+staging_distance = 85
+contact_distance = 64
+transport_distance = 63
+formation_gain = 2
+max_correction = 70
+recovery_distance = 25
+max_motion_speed = 60
+final_tolerance = 10
+neighbor_round = ('[data:makeList]' 0 0 0 0 0)
+neighbor_phase = ('[data:makeList]' 0 0 0 0 0)
+neighbor_ready = ('[data:makeList]' 0 0 0 0 0)
+neighbor_time = ('[data:makeList]' 0 0 0 0 0)
+last_run_time = -10000
+'[net:ESPNowSetChannel]' 13
+'[net:ESPNowSetGroup]' 209
+'OmniStamp set target tolerance' 6
+'OmniStamp set minimum tracking speed' 50
+displayCharacter ID
+'[tft:text]' ('[misc:bleID]') 165 170 (colorSwatch 255 17 81 255)
+sendBroadcast 'broadcast smooth transport state'
+sendBroadcast 'smooth transport control'
+}
+
+script 470 33 {
+whenButtonPressed 'B'
+if (running == 0) {
+  ID += 1
+  if (ID > 5) {
+    ID = 1
+  }
+  displayCharacter ID
+  '[tft:text]' ('[misc:bleID]') 165 170 (colorSwatch 255 17 81 255)
+}
+}
+
+script 710 33 {
+whenButtonPressed 'A'
+if (ID == 1) {
+  if (running == 1) {
+    'stop smooth pentagon transport'
+  } else {
+    'start smooth pentagon transport'
+  }
+}
+}
+
+script 470 355 {
+whenBroadcastReceived 'broadcast smooth transport state'
+forever {
+  espNow_send_pair ('[data:join]' transport_round ',' phase ',' ready ',' formation_center_x ',' formation_center_y ',' path_velocity_x ',' path_velocity_y ',' path_stage ',' command_seq ',' running) ID
+  waitMillis 40
+}
+}
+
+script 39 878 {
+whenCondition (espNow_receive_any)
+if ((espNow_last_type) == 'run') {
+  if (((millisOp) - last_run_time) > 1000) {
+    last_run_time = (millisOp)
+    'start smooth pentagon transport'
+  }
+} ((espNow_last_type) == 'pair') {
+  'handle smooth transport state' (espNow_last_number) (espNow_last_string)
+} else {
+  if ((espNow_last_string) == 'stop') {
+    'stop smooth pentagon transport'
+  }
+}
+}
+
+script 470 943 {
+whenBroadcastReceived 'smooth transport control'
+forever {
+  if (running == 1) {
+    if (and (ID == 1) (phase == 3)) {
+      'update smooth reference path'
+    }
+    if (or (phase == 1) (or (phase == 2) (phase == 4))) {
+      'update approach or final target'
+      'OmniStamp track target' target_x target_y command_speed
+    } (phase == 3) {
+      'update smooth formation motion'
+    } else {
+      'OmniStamp stop'
+    }
+    if (ID == 1) {
+      if (and (phase == 1) ('all smooth transport robots ready')) {
+        phase = 2
+        ready = 0
+        phase_start_time = (millisOp)
+      } (and (phase == 2) (((millisOp) - phase_start_time) >= 2000)) {
+        phase = 3
+        ready = 0
+        path_stage = 1
+        command_seq = 0
+        formation_center_x = 120
+        formation_center_y = 120
+        path_velocity_x = path_speed
+        path_velocity_y = 0
+        transport_hold_angle = ('OmniStamp direction')
+      } (and (phase == 4) ('all smooth transport robots ready')) {
+        phase = 5
+        running = 0
+        ready = 0
+        'OmniStamp stop'
+      }
+    }
+  } else {
+    'OmniStamp stop'
+  }
+  waitMillis 40
+}
+}
+
+module 'ESP Now' Comm
+author MicroBlocks
+version 1 3 
+description 'Support for ESP Now peer-to-peer messaging for ESP boards.'
+variables _espNow_lastNumber _espNow_lastString _espNow_lastType 
+
+  spec ' ' 'espNow_send_pair' 'espNow send pair _ = _' 'str num' 'light' 10
+  spec 'r' 'espNow_receive_any' 'espNow message received?'
+  spec 'r' 'espNow_last_type' 'espNow last message type'
+  spec 'r' 'espNow_last_number' 'espNow last number'
+  spec 'r' 'espNow_last_string' 'espNow last string'
+  space
+  spec ' ' '[net:ESPNowSetGroup]' 'espNow set group _ (0-255)' 'num' 0
+  spec 'r' '[net:ESPNowGroup]' 'espNow group'
+  space
+  advanced
+  spec ' ' 'espNow_send' 'espNow send raw _' 'str' 'Hello, ESP Now!'
+  spec 'r' '[net:ESPNowReceive]' 'espNow receive raw'
+  space
+  spec ' ' '[net:ESPNowSetChannel]' 'espNow set channel _' 'menu.range:1-13' 1
+  spec 'r' '[net:ESPNowChannel]' 'espNow channel'
+
+to espNow_last_number {
+  return _espNow_lastNumber
+}
+
+to espNow_last_string {
+  return _espNow_lastString
+}
+
+to espNow_last_type {
+  return _espNow_lastType
+}
+
+to espNow_receive_any {
+  local 'msg' ('[net:ESPNowReceive]')
+  if ((size msg) == 0) {
+    return (booleanConstant false)
+  }
+  if (msg == 'run') {
+    _espNow_lastType = 'run'
+    _espNow_lastString = msg
+    return (booleanConstant true)
+  }
+  if (and ((size msg) >= 5) ('NOW' == ('[data:copyFromTo]' msg 1 3))) {
+    local 'parts' ('[data:split]' msg '|')
+    if ((size parts) == 3) {
+      _espNow_lastType = 'pair'
+      _espNow_lastNumber = ('[data:convertType]' (at 2 parts) 'number')
+      _espNow_lastString = (at 3 parts)
+      return (booleanConstant true)
+    }
+  }
+  _espNow_lastType = 'other'
+  _espNow_lastString = msg
+  return (booleanConstant true)
+}
+
+to espNow_send msg {
+  '[net:ESPNowSend]' ('[data:convertType]' msg 'string')
+}
+
+to espNow_send_pair s n {
+  espNow_send ('[data:join]' 'NOW' '|' ('[data:toString]' n) '|' s)
+}
+
+
+module 'LED Display' Output
+author MicroBlocks
+version 1 15 
+description 'Minimal LED display library used to show the OmniStamp robot ID.'
+
+  spec ' ' 'displayCharacter' 'display character _' 'str' '1'
+  spec ' ' '[display:mbDisplayOff]' 'clear display'
+
+to displayCharacter s {
+  s = ('[data:join]' '' s)
+  if ((size s) == 0) {
+    '[display:mbDisplayOff]'
+    return 0
+  }
+  '[display:mbDrawShape]' ('[display:mbShapeForLetter]' (at 1 s)) 1 1
+}
+
+
+module 'Misc Primitives'
+author MicroBlocks
+version 1 11 
+description 'Only the system primitives required by OmniStamp target tracking.'
+
+  spec 'r' 'callCustomReporter' 'call _ : with _' 'str.functionNameMenu str' '' 'parameter list'
+  space
+  spec 'r' '[misc:sin]' 'fixed sine _' 'num' 9000
+  spec 'r' '[misc:sqrt]' 'sqrt _' 'num' 9
+
+module OmniStamp_v4
+author 'Liang Shuai'
+version 0 42 
+tags 'omnistamp robot omni wheel' 
+description 'OmniStamp three-wheel omnidirectional robot library.
+
+Map coordinates use +X to the right and +Y downward. Wheel speed ranges
+from -100 to 100. Positive turn speed increases the OID heading angle.
+Wheel names are top, bottom-left, and bottom-right when viewed from above.
+
+V3 uses linear PWM without dead-zone compensation. The maximum wheel speed is
+fixed at 60 percent for 3 V motors powered from 5 V.
+V3.1 adds non-blocking target tracking.
+V4 adds cross-track error correction and low-speed approach to move-to-target.
+V4.1 delays deceleration until the final 50 map units and keeps enough torque.
+V4.2 adds configurable target tolerance and minimum tracking speed for cooperative transport.
+'
+variables _omni_top_sign _omni_bottom_left_sign _omni_bottom_right_sign _omni_motion_active _omni_tracking_enabled _omni_track_task_started _omni_target_x _omni_target_y _omni_target_speed _omni_track_hold_angle _omni_target_tolerance _omni_minimum_track_speed 
+
+  spec 'r' 'OmniStamp position X' 'position X'
+  spec 'r' 'OmniStamp position Y' 'position Y'
+  spec 'r' 'OmniStamp direction' 'direction'
+  spec 'r' 'OmniStamp on map' 'on map'
+  space
+  spec ' ' 'OmniStamp set wheel speeds' 'set wheel speeds top _ bottom-left _ bottom-right _ (-100 to 100)' 'num num num' 0 0 0
+  spec ' ' 'OmniStamp stop' 'stop wheels'
+  spec ' ' 'OmniStamp brake' 'brake wheels'
+  space
+  spec ' ' 'OmniStamp move robot' 'move robot forward _ right _ turn _ (-100 to 100)' 'num num num' 50 0 0
+  spec ' ' 'OmniStamp move on map' 'move on map X speed _ Y speed _ turn _' 'num num num' 50 0 0
+  spec ' ' 'OmniStamp move along X' 'move along map X at speed _' 'num' 50
+  spec ' ' 'OmniStamp move along Y' 'move along map Y at speed _' 'num' 50
+  space
+  spec ' ' 'OmniStamp move to' 'move to X _ Y _ at speed _' 'num num num' 100 100 50
+  spec ' ' 'OmniStamp track target' 'track target X _ Y _ at speed _' 'num num num' 100 100 50
+  spec ' ' 'OmniStamp set target tolerance' 'set target tolerance _' 'num' 6
+  spec ' ' 'OmniStamp set minimum tracking speed' 'set minimum tracking speed _' 'num' 50
+  space
+  spec ' ' '_omni_set_wheels' '_omni_set_wheels top _ bottom-left _ bottom-right _' 'num num num' 0 0 0
+  spec ' ' '_omni_set_motor' '_omni_set_motor pin 1 _ pin 2 _ speed _' 'num num num' 0 0 0
+  spec ' ' '_omni_apply_motion' '_omni_apply_motion forward _ right _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_move_on_map' '_omni_move_on_map X _ Y _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_track_target' '_omni_track_target'
+  spec 'r' '_omni_angle_error' '_omni_angle_error target _' 'num' 0
+  spec 'r' '_omni_limit' '_omni_limit _ to _' 'num num' 0 100
+
+to 'OmniStamp brake' {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  digitalWriteOp 14 true
+  digitalWriteOp 13 true
+  digitalWriteOp 41 true
+  digitalWriteOp 42 true
+  digitalWriteOp 1 true
+  digitalWriteOp 2 true
+  waitMillis 100
+  digitalWriteOp 14 false
+  digitalWriteOp 13 false
+  digitalWriteOp 41 false
+  digitalWriteOp 42 false
+  digitalWriteOp 1 false
+  digitalWriteOp 2 false
+}
+
+to 'OmniStamp direction' {
+  return (callCustomReporter '[sensors:position_yaw]')
+}
+
+to 'OmniStamp move along X' speed {
+  'OmniStamp move on map' speed 0 0
+}
+
+to 'OmniStamp move along Y' speed {
+  'OmniStamp move on map' 0 speed 0
+}
+
+to 'OmniStamp move on map' x_speed y_speed turn {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_move_on_map' x_speed y_speed turn
+}
+
+to 'OmniStamp move robot' forward right turn {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_apply_motion' forward right turn
+}
+
+to 'OmniStamp move to' target_x target_y speed {
+  _omni_tracking_enabled = false
+  _omni_motion_active = true
+  speed = (absoluteValue speed)
+  speed = (maximum 30 (minimum speed 100))
+  local 'start_time' (millisOp)
+  local 'hold_angle' ('OmniStamp direction')
+  local 'start_x' ('OmniStamp position X')
+  local 'start_y' ('OmniStamp position Y')
+  local 'path_dx' (target_x - start_x)
+  local 'path_dy' (target_y - start_y)
+  local 'path_length' ('[misc:sqrt]' ((path_dx * path_dx) + (path_dy * path_dy)))
+  local 'unit_x' ((path_dx * 1000) / (maximum path_length 1))
+  local 'unit_y' ((path_dy * 1000) / (maximum path_length 1))
+  local 'normal_x' (0 - unit_y)
+  local 'normal_y' unit_x
+  forever {
+    if (not _omni_motion_active) {exitLoop}
+    if (not ('OmniStamp on map')) {
+      'OmniStamp stop'
+      exitLoop
+    }
+    local 'current_x' ('OmniStamp position X')
+    local 'current_y' ('OmniStamp position Y')
+    local 'dx' (target_x - current_x)
+    local 'dy' (target_y - current_y)
+    local 'distance' ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+    if (distance <= 3) {
+      'OmniStamp brake'
+      exitLoop
+    }
+    if (((millisOp) - start_time) > 15000) {
+      'OmniStamp stop'
+      exitLoop
+    }
+    comment 'Keep the requested speed until the last 50 map units. Inside the
+approach zone, reduce speed but keep at least 30 percent to avoid stalling.'
+    local 'move_speed' speed
+    if (distance < 50) {
+      move_speed = (maximum 30 distance)
+      move_speed = (minimum move_speed speed)
+      if (move_speed < 30) {
+        move_speed = 30
+      }
+    }
+    comment 'Signed distance from the fixed start-to-target line. The normal
+vector is scaled by 1000 to preserve precision in integer arithmetic.'
+    local 'cross_error' ((((current_x - start_x) * normal_x) + ((current_y - start_y) * normal_y)) / 1000)
+    local 'cross_correction' ('_omni_limit' (cross_error * 2) 20)
+    comment 'Move toward the endpoint and add a perpendicular correction that
+pulls the robot back toward the original straight path.'
+    local 'x_speed' (((dx * move_speed) / (maximum distance 1)) - ((normal_x * cross_correction) / 1000))
+    local 'y_speed' (((dy * move_speed) / (maximum distance 1)) - ((normal_y * cross_correction) / 1000))
+    local 'turn_speed' ('_omni_limit' ('_omni_angle_error' hold_angle) 20)
+    '_omni_move_on_map' x_speed y_speed turn_speed
+    waitMillis 20
+  }
+  _omni_motion_active = false
+}
+
+to 'OmniStamp on map' {
+  return (callCustomReporter '[sensors:cube_status]')
+}
+
+to 'OmniStamp position X' {
+  return ((callCustomReporter '[sensors:position_x]') / 64)
+}
+
+to 'OmniStamp position Y' {
+  return ((callCustomReporter '[sensors:position_y]') / 64)
+}
+
+to 'OmniStamp set wheel speeds' top bottom_left bottom_right {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to 'OmniStamp stop' {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_set_wheels' 0 0 0
+}
+
+to 'OmniStamp set minimum tracking speed' speed {
+  _omni_minimum_track_speed = (maximum 20 (minimum (absoluteValue speed) 100))
+}
+
+to 'OmniStamp set target tolerance' tolerance {
+  _omni_target_tolerance = (maximum 1 (minimum (absoluteValue tolerance) 20))
+}
+
+to 'OmniStamp track target' target_x target_y speed {
+  _omni_motion_active = false
+  if (not _omni_tracking_enabled) {
+    _omni_track_hold_angle = ('OmniStamp direction')
+  }
+  _omni_target_x = target_x
+  _omni_target_y = target_y
+  _omni_target_speed = (maximum 0 (minimum (absoluteValue speed) 100))
+  _omni_tracking_enabled = (booleanConstant true)
+  if (not _omni_track_task_started) {
+    _omni_track_task_started = (booleanConstant true)
+    sendBroadcast '_omni_track_target'
+  }
+}
+
+to '_omni_angle_error' target {
+  local 'error' ((target % 360) - ('OmniStamp direction'))
+  if (error > 180) {
+    error += -360
+  } (error < -180) {
+    error += 360
+  }
+  return error
+}
+
+to '_omni_apply_motion' forward right turn {
+  forward = ('_omni_limit' forward 100)
+  right = ('_omni_limit' right 100)
+  turn = ('_omni_limit' turn 100)
+  local 'top' ((0 - right) + turn)
+  local 'bottom_left' ((((-866 * forward) + (500 * right)) / 1000) + turn)
+  local 'bottom_right' ((((866 * forward) + (500 * right)) / 1000) + turn)
+  local 'largest' (maximum (absoluteValue top) (maximum (absoluteValue bottom_left) (absoluteValue bottom_right)))
+  if (largest > 100) {
+    top = ((top * 100) / largest)
+    bottom_left = ((bottom_left * 100) / largest)
+    bottom_right = ((bottom_right * 100) / largest)
+  }
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to '_omni_limit' value limit {
+  return (maximum (0 - limit) (minimum value limit))
+}
+
+to '_omni_move_on_map' x_speed y_speed turn {
+  local 'yaw_x100' (('OmniStamp direction') * 100)
+  local 'sin_yaw' ('[misc:sin]' yaw_x100)
+  local 'cos_yaw' ('[misc:sin]' (yaw_x100 + 9000))
+  local 'forward' (((x_speed * sin_yaw) + (y_speed * cos_yaw)) >> 14)
+  local 'right' ((((0 - x_speed) * cos_yaw) + (y_speed * sin_yaw)) >> 14)
+  '_omni_apply_motion' forward right turn
+}
+
+to '_omni_set_motor' pin1 pin2 speed {
+  speed = ('_omni_limit' speed 100)
+  local 'pwm' (((absoluteValue speed) * 1023) / 100)
+  if (speed > 0) {
+    digitalWriteOp pin2 false
+    analogWriteOp pin1 pwm
+  } (speed < 0) {
+    digitalWriteOp pin1 false
+    analogWriteOp pin2 pwm
+  } else {
+    digitalWriteOp pin1 false
+    digitalWriteOp pin2 false
+  }
+}
+
+to '_omni_set_wheels' top bottom_left bottom_right {
+  if (_omni_top_sign == 0) {
+    _omni_top_sign = 1
+    _omni_bottom_left_sign = 1
+    _omni_bottom_right_sign = 1
+  }
+  top = ('_omni_limit' top 100)
+  bottom_left = ('_omni_limit' bottom_left 100)
+  bottom_right = ('_omni_limit' bottom_right 100)
+  local 'largest' (maximum (absoluteValue top) (maximum (absoluteValue bottom_left) (absoluteValue bottom_right)))
+  if (largest > 60) {
+    top = ((top * 60) / largest)
+    bottom_left = ((bottom_left * 60) / largest)
+    bottom_right = ((bottom_right * 60) / largest)
+  }
+  '_omni_set_motor' 41 42 (top * _omni_top_sign)
+  '_omni_set_motor' 1 2 (bottom_left * _omni_bottom_left_sign)
+  '_omni_set_motor' 14 13 (bottom_right * _omni_bottom_right_sign)
+}
+
+to '_omni_track_target' {
+  forever {
+    if _omni_tracking_enabled {if ('OmniStamp on map') {
+      if (_omni_target_tolerance <= 0) {_omni_target_tolerance = 6}
+      if (_omni_minimum_track_speed <= 0) {_omni_minimum_track_speed = 50}
+      local 'dx' (_omni_target_x - ('OmniStamp position X'))
+      local 'dy' (_omni_target_y - ('OmniStamp position Y'))
+      local 'distance' ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+      if (or (distance <= _omni_target_tolerance) (_omni_target_speed == 0)) {
+        '_omni_set_wheels' 0 0 0
+        _omni_track_task_started = (booleanConstant false)
+        return 0
+      } else {
+        local 'move_speed' (minimum _omni_target_speed (maximum _omni_minimum_track_speed (distance * 2)))
+        local 'x_speed' ((dx * move_speed) / (maximum distance 1))
+        local 'y_speed' ((dy * move_speed) / (maximum distance 1))
+        local 'turn_speed' ('_omni_limit' ('_omni_angle_error' _omni_track_hold_angle) 30)
+        '_omni_move_on_map' x_speed y_speed turn_speed
+      }
+    } else {
+      '_omni_set_wheels' 0 0 0
+    }}
+    waitMillis 20
+  }
+}
+
+
+module TFT Output
+author MicroBlocks
+version 1 19 
+description 'Draw graphics and write text on boards with a TFT display, such as the M5Stack, M5Stick, Citilab ED1 or (discontinued) IoT-Bus.'
+
+  spec ' ' '[tft:clear]' 'clear TFT display'
+  space
+  spec ' ' '[tft:rect]' 'draw rectangle on TFT at x _ y _ width _ height _ color _ : filled _' 'num num num num color bool' 10 10 40 30 nil true
+  spec ' ' '[tft:roundedRect]' 'draw rounded rectangle on TFT at x _ y _ width _ height _ radius _ color _ : filled _' 'num num num num num color bool' 10 10 40 30 8 nil true
+  spec ' ' '[tft:circle]' 'draw circle on TFT at x _ y _ radius _ color _ : filled _' 'num num num color bool' 40 40 30 nil true
+  spec ' ' '[tft:triangle]' 'draw triangle on TFT at x _ y _ , x _ y _ , x _ y _ color _ : filled _' 'num num num num num num color bool' 20 20 30 80 60 5 nil true
+  spec ' ' '[tft:line]' 'draw line on TFT from x _ y _ to x _ y _ color _' 'num num num num color' 12 8 25 15
+  spec ' ' 'tft_drawVector' 'draw vector x _ y _ angle _ length _ color _' 'num num num num color' 40 40 45 40
+  space
+  spec ' ' '[tft:text]' 'write _ on TFT at x _ y _ color _ : scale _ wrap _ : bg color _' 'str num num color num bool color' 'Hello World!' 5 5 nil 2 true
+  spec ' ' 'tft_drawText' 'draw text _ on TFT at x _ y _ color _ : scale _ : bg color _' 'str num num color num color' 'Line 1
+Line 2' 50 20 nil 2
+  space
+  spec ' ' '[tft:setPixel]' 'set TFT pixel x _ y _ to _' 'num num color' 10 10
+  spec ' ' '[tft:pixelRow]' 'draw pixel row _ x _ y _ : bytes per pixel _ : palette _' 'auto num num num str' 'aList' 0 0 4
+  spec ' ' '[tft:drawBitmap]' 'draw bitmap _ palette _ on TFT at x _ y _' 'str str num num' 'aBitmap' 'a list of colors' 10 10
+  space
+  spec 'r' 'tft_colorSwatch' '_' 'color'
+  spec 'r' 'makeColor' 'color r _ g _ b _ (0-255)' 'num num num' 0 100 100
+  spec 'r' 'makeGray' 'gray _ %' 'num' 50
+  spec 'r' 'randomColor' 'random color'
+  space
+  spec ' ' 'tft_drawImage' 'draw image _ on TFT at x _ y _ color _ : #BR# scale _' 'str num num color num' '' 0 0 nil 1
+  spec 'r' 'tft_image' 'image _' 'str' '00000
+01010
+00000
+10001
+01110'
+  space
+  spec 'r' '[tft:getWidth]' 'TFT width'
+  spec 'r' '[tft:getHeight]' 'TFT height'
+  space
+  spec ' ' '[tft:setBacklight]' 'set TFT backlight _ (0-10)' 'num' 10
+  spec ' ' '[tft:invertDisplay]' 'invert TFT display _' 'bool' false
+  advanced
+  spec ' ' 'tft_deferOLEDDisplayUpdates' 'defer OLED display updates'
+  spec ' ' 'tft_resumeOLEDDisplayUpdates' 'resume OLED display updates'
+  space
+  spec ' ' '_deferMonochromeDisplayUpdates' '_defer monochrome display updates'
+  spec ' ' '_resumeMonochromeDisplayUpdates' '_resume monochrome display updates'
+
+to '_deferMonochromeDisplayUpdates' {
+  '[tft:deferUpdates]'
+}
+
+to '_resumeMonochromeDisplayUpdates' {
+  '[tft:resumeUpdates]'
+}
+
+to makeColor r g b {
+  r = (maximum 0 (minimum r 255))
+  g = (maximum 0 (minimum g 255))
+  b = (maximum 0 (minimum b 255))
+  return ((r << 16) | ((g << 8) | b))
+}
+
+to makeGray percent {
+  gray = ((percent * 255) / 100)
+  gray = (maximum 0 (minimum gray 255))
+  return ((gray << 16) | ((gray << 8) | gray))
+}
+
+to randomColor {
+  local 'n1' (random 100 200)
+  local 'n2' (random 0 100)
+  if (1 == (random 1 3)) {
+    return ((n1 << 16) | (n2 << 8))
+  } (1 == (random 1 2)) {
+    return ((n2 << 16) | n1)
+  } else {
+    return ((n1 << 8) | n2)
+  }
+}
+
+to tft_colorSwatch color {
+  return color
+}
+
+to tft_deferOLEDDisplayUpdates {
+  '[tft:deferUpdates]'
+}
+
+to tft_drawImage imageString x y c optionalScale {
+  comment 'Draw an image at the given position. An image is represented by a multi-line string
+of 0 and 1 characters where each line is one row of the image. 1 means that pixel on (lit).'
+  local 'scale' (argOrDefault 5 1)
+  local 'left' x
+  for ch ('[data:convertType]' imageString 'byte array') {
+    if (ch == 10) {
+      y += scale
+      x = left
+    } else {
+      if (ch == 49) {'[tft:rect]' x y scale scale c}
+      x += scale
+    }
+  }
+}
+
+to tft_drawText s x y color optionalScale optionalBGColor {
+  s = ('[data:convertType]' s 'string')
+  local 'scale' (argOrDefault 5 2)
+  local 'bgColor' (argOrDefault 6 '')
+  local 'lines' ('[data:split]' s ('[data:unicodeString]' 10))
+  for line ('[data:split]' s ('[data:unicodeString]' 10)) {
+    if (isType bgColor 'number') {
+      '[tft:text]' line x y color scale false bgColor
+    } else {
+      '[tft:text]' line x y color scale false
+    }
+    y += (8 * scale)
+  }
+}
+
+to tft_drawVector x y angle length color {
+  local 'endX' (x + ((length * ('[misc:sin]' (100 * (angle + 90)))) >> 14))
+  local 'endY' (y + ((length * ('[misc:sin]' (100 * angle))) >> 14))
+  '[tft:line]' x y endX endY color
+}
+
+to tft_image s {
+  return ('[data:convertType]' s 'string')
+}
+
+to tft_resumeOLEDDisplayUpdates {
+  '[tft:resumeUpdates]'
+}
+

@@ -1,0 +1,5 @@
+fleet_size,trials,expected_packets_per_robot,mean_received_packets_per_robot,overall_pdr_percent,overall_pdr_std_percent,min_directed_link_pdr_percent
+2,4,1000,960.5,96.05,0.39,93.70
+3,4,2000,1932.5,96.63,0.51,92.10
+4,4,3000,2881.4,96.05,0.34,89.10
+5,4,4000,3759.5,93.99,1.17,82.40

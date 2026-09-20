@@ -1,0 +1,4 @@
+configuration,trials,robots_reached_goal_trials,collision_free_trials,collision_free_rate_percent,mean_completion_time_collision_free_s
+Pentagram crossing,20,20,20,100.0,4.16
+Central crossing,20,20,17,85.0,6.12
+Multi-path convergence,20,20,16,80.0,6.65

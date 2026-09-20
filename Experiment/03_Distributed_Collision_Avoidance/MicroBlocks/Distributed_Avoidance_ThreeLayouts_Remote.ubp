@@ -1,0 +1,710 @@
+module main
+author unknown
+version 1 0 
+description 'Three-layout remote-controlled distributed avoidance. Commands ini_1..ini_3 and run_1..run_3 select stored initial and goal positions. All layouts use the same avoidance thresholds.'
+variables ID running layout_id target_phase goal_x goal_y waypoint_x waypoint_y command_speed nearest_neighbor neighbor_x neighbor_y neighbor_vx neighbor_vy neighbor_time last_self_x last_self_y last_self_time self_vx self_vy active_distance safe_distance emergency_distance lookahead goal_gain repel_gain tangent_gain prediction_ms base_speed avoid_vector_x avoid_vector_y avoid_self_x avoid_self_y 
+
+  spec ' ' 'load layout target' 'load layout _ target phase _' 'num num' 1 0
+  spec ' ' 'load avoidance thresholds' 'load avoidance thresholds'
+  spec ' ' 'apply remote command' 'apply remote command _' 'str' 'ini_1'
+  spec ' ' 'update avoidance waypoint' 'update avoidance waypoint'
+  spec ' ' 'add avoidance from neighbor' 'add avoidance from neighbor ID _' 'num' 1
+  space
+  spec 'r' 'avoidance target X' 'avoidance target X'
+  spec 'r' 'avoidance target Y' 'avoidance target Y'
+  spec 'r' 'nearest robot distance' 'nearest robot distance'
+
+to 'add avoidance from neighbor' neighbor_id {
+  local 'current_dx' (avoid_self_x - (at neighbor_id neighbor_x))
+  local 'current_dy' (avoid_self_y - (at neighbor_id neighbor_y))
+  local 'current_distance' ('[misc:sqrt]' ((current_dx * current_dx) + (current_dy * current_dy)))
+  nearest_neighbor = (minimum nearest_neighbor current_distance)
+  local 'predicted_x' ((at neighbor_id neighbor_x) + (((at neighbor_id neighbor_vx) * prediction_ms) / 1000))
+  local 'predicted_y' ((at neighbor_id neighbor_y) + (((at neighbor_id neighbor_vy) * prediction_ms) / 1000))
+  local 'away_x' ((avoid_self_x + ((self_vx * prediction_ms) / 1000)) - predicted_x)
+  local 'away_y' ((avoid_self_y + ((self_vy * prediction_ms) / 1000)) - predicted_y)
+  local 'predicted_distance' ('[misc:sqrt]' ((away_x * away_x) + (away_y * away_y)))
+  if (predicted_distance < active_distance) {
+    local 'influence' (active_distance - predicted_distance)
+    local 'repel' ((repel_gain * influence) / active_distance)
+    local 'tangent' ((tangent_gain * influence) / active_distance)
+    local 'denominator' (maximum 1 predicted_distance)
+    avoid_vector_x += (((repel * away_x) - (tangent * away_y)) / denominator)
+    avoid_vector_y += (((repel * away_y) + (tangent * away_x)) / denominator)
+  }
+  if (current_distance < safe_distance) {
+    command_speed = (minimum command_speed 60)
+  }
+  if (current_distance < emergency_distance) {
+    command_speed = 50
+    avoid_vector_x += ((400 * current_dx) / (maximum 1 current_distance))
+    avoid_vector_y += ((400 * current_dy) / (maximum 1 current_distance))
+  }
+}
+
+to 'avoidance target X' {
+  return waypoint_x
+}
+
+to 'avoidance target Y' {
+  return waypoint_y
+}
+
+to 'load layout target' selected_layout selected_phase {
+  if (selected_layout == 1) {
+    if (selected_phase == 0) {
+      if (ID == 1) {
+        goal_x = 300
+        goal_y = 120
+      } (ID == 2) {
+        goal_x = 470
+        goal_y = 245
+      } (ID == 3) {
+        goal_x = 405
+        goal_y = 445
+      } (ID == 4) {
+        goal_x = 195
+        goal_y = 445
+      } else {
+        goal_x = 130
+        goal_y = 245
+      }
+    } else {
+      if (ID == 1) {
+        goal_x = 405
+        goal_y = 445
+      } (ID == 2) {
+        goal_x = 195
+        goal_y = 445
+      } (ID == 3) {
+        goal_x = 130
+        goal_y = 245
+      } (ID == 4) {
+        goal_x = 300
+        goal_y = 120
+      } else {
+        goal_x = 470
+        goal_y = 245
+      }
+    }
+  } (selected_layout == 2) {
+    if (selected_phase == 0) {
+      if (ID == 1) {
+        goal_x = 120
+        goal_y = 300
+      } (ID == 2) {
+        goal_x = 480
+        goal_y = 300
+      } (ID == 3) {
+        goal_x = 300
+        goal_y = 120
+      } (ID == 4) {
+        goal_x = 300
+        goal_y = 480
+      } else {
+        goal_x = 180
+        goal_y = 180
+      }
+    } else {
+      if (ID == 1) {
+        goal_x = 480
+        goal_y = 300
+      } (ID == 2) {
+        goal_x = 120
+        goal_y = 300
+      } (ID == 3) {
+        goal_x = 300
+        goal_y = 480
+      } (ID == 4) {
+        goal_x = 300
+        goal_y = 120
+      } else {
+        goal_x = 420
+        goal_y = 420
+      }
+    }
+  } else {
+    if (selected_phase == 0) {
+      if (ID == 1) {
+        goal_x = 140
+        goal_y = 160
+      } (ID == 2) {
+        goal_x = 140
+        goal_y = 230
+      } (ID == 3) {
+        goal_x = 140
+        goal_y = 300
+      } (ID == 4) {
+        goal_x = 140
+        goal_y = 370
+      } else {
+        goal_x = 140
+        goal_y = 440
+      }
+    } else {
+      if (ID == 1) {
+        goal_x = 460
+        goal_y = 440
+      } (ID == 2) {
+        goal_x = 460
+        goal_y = 370
+      } (ID == 3) {
+        goal_x = 460
+        goal_y = 300
+      } (ID == 4) {
+        goal_x = 460
+        goal_y = 230
+      } else {
+        goal_x = 460
+        goal_y = 160
+      }
+    }
+  }
+}
+
+to 'load avoidance thresholds' {
+  active_distance = 100
+  safe_distance = 72
+  emergency_distance = 58
+}
+
+to 'apply remote command' command {
+  if (command == 'ini_1') {
+    layout_id = 1
+    target_phase = 0
+  } (command == 'run_1') {
+    layout_id = 1
+    target_phase = 1
+  } (command == 'ini_2') {
+    layout_id = 2
+    target_phase = 0
+  } (command == 'run_2') {
+    layout_id = 2
+    target_phase = 1
+  } (command == 'ini_3') {
+    layout_id = 3
+    target_phase = 0
+  } (command == 'run_3') {
+    layout_id = 3
+    target_phase = 1
+  } else {
+    return
+  }
+  'load avoidance thresholds'
+  'load layout target' layout_id target_phase
+  running = (booleanConstant true)
+}
+
+to 'nearest robot distance' {
+  return nearest_neighbor
+}
+
+to 'update avoidance waypoint' {
+  avoid_self_x = ('OmniStamp position X')
+  avoid_self_y = ('OmniStamp position Y')
+  local 'goal_dx' (goal_x - avoid_self_x)
+  local 'goal_dy' (goal_y - avoid_self_y)
+  local 'goal_distance' ('[misc:sqrt]' ((goal_dx * goal_dx) + (goal_dy * goal_dy)))
+  if (goal_distance <= 4) {
+    waypoint_x = goal_x
+    waypoint_y = goal_y
+    command_speed = 0
+    running = (booleanConstant false)
+    'OmniStamp stop'
+    return
+  }
+  avoid_vector_x = ((goal_gain * goal_dx) / (maximum 1 goal_distance))
+  avoid_vector_y = ((goal_gain * goal_dy) / (maximum 1 goal_distance))
+  nearest_neighbor = 10000
+  command_speed = base_speed
+  for neighbor_id 5 {
+    if (and (and (neighbor_id != ID) ((at neighbor_id neighbor_time) > 0)) (((millisOp) - (at neighbor_id neighbor_time)) < 350)) {'add avoidance from neighbor' neighbor_id}
+  }
+  local 'vector_length' ('[misc:sqrt]' ((avoid_vector_x * avoid_vector_x) + (avoid_vector_y * avoid_vector_y)))
+  if (vector_length < 1) {
+    avoid_vector_x = goal_dx
+    avoid_vector_y = goal_dy
+    vector_length = (maximum 1 goal_distance)
+  }
+  local 'step' (minimum lookahead goal_distance)
+  waypoint_x = (avoid_self_x + ((step * avoid_vector_x) / vector_length))
+  waypoint_y = (avoid_self_y + ((step * avoid_vector_y) / vector_length))
+}
+
+script 33 33 {
+whenStarted
+ID = 1
+running = (booleanConstant false)
+layout_id = 1
+target_phase = 0
+neighbor_x = ('[data:makeList]' 0 0 0 0 0)
+neighbor_y = ('[data:makeList]' 0 0 0 0 0)
+neighbor_vx = ('[data:makeList]' 0 0 0 0 0)
+neighbor_vy = ('[data:makeList]' 0 0 0 0 0)
+neighbor_time = ('[data:makeList]' 0 0 0 0 0)
+'load avoidance thresholds'
+lookahead = 35
+goal_gain = 100
+repel_gain = 220
+tangent_gain = 150
+prediction_ms = 200
+base_speed = 70
+'[net:ESPNowSetChannel]' 13
+'[net:ESPNowSetGroup]' 207
+'load layout target' layout_id target_phase
+last_self_x = ('OmniStamp position X')
+last_self_y = ('OmniStamp position Y')
+last_self_time = (millisOp)
+displayCharacter ID
+sendBroadcast 'broadcast state'
+sendBroadcast 'avoidance control'
+}
+
+script 475 42 {
+whenButtonPressed 'B'
+if (not running) {
+  ID += 1
+  if (ID > 5) {
+    ID = 1
+  }
+  'load layout target' layout_id target_phase
+  displayCharacter ID
+}
+}
+
+script 715 42 {
+whenButtonPressed 'A'
+running = (not running)
+if (not running) {
+  'OmniStamp stop'
+}
+}
+
+script 479 351 {
+whenBroadcastReceived 'broadcast state'
+forever {
+  local 'now' (millisOp)
+  local 'x' ('OmniStamp position X')
+  local 'y' ('OmniStamp position Y')
+  local 'dt' (now - last_self_time)
+  if (dt > 0) {
+    self_vx = (((x - last_self_x) * 1000) / dt)
+    self_vy = (((y - last_self_y) * 1000) / dt)
+  }
+  last_self_x = x
+  last_self_y = y
+  last_self_time = now
+  espNow_send_pair ('[data:join]' x ',' y ',' self_vx ',' self_vy) ID
+  waitMillis 50
+}
+}
+
+script 33 858 {
+whenCondition (espNow_receive_any)
+if ((espNow_last_type) == 'run') {
+  running = (booleanConstant true)
+} ((espNow_last_type) == 'pair') {
+  local 'sender' (espNow_last_number)
+  if (and (and (sender >= 1) (sender <= 5)) (sender != ID)) {
+    local 'parts' ('[data:split]' (espNow_last_string) ',')
+    if ((size parts) >= 4) {
+      atPut sender neighbor_x ('[data:convertType]' (at 1 parts) 'number')
+      atPut sender neighbor_y ('[data:convertType]' (at 2 parts) 'number')
+      atPut sender neighbor_vx ('[data:convertType]' (at 3 parts) 'number')
+      atPut sender neighbor_vy ('[data:convertType]' (at 4 parts) 'number')
+      atPut sender neighbor_time (millisOp)
+    }
+  }
+} ((espNow_last_type) == 'other') {
+  'apply remote command' (espNow_last_string)
+}
+}
+
+script 479 1058 {
+whenBroadcastReceived 'avoidance control'
+forever {
+  if running {
+    'update avoidance waypoint'
+    'OmniStamp track target' waypoint_x waypoint_y command_speed
+  }
+  waitMillis 50
+}
+}
+
+
+module 'ESP Now' Comm
+author MicroBlocks
+version 1 3 
+description 'Support for ESP Now peer-to-peer messaging for ESP boards.'
+variables _espNow_lastNumber _espNow_lastString _espNow_lastType 
+
+  spec ' ' 'espNow_send_pair' 'espNow send pair _ = _' 'str num' 'light' 10
+  spec 'r' 'espNow_receive_any' 'espNow message received?'
+  spec 'r' 'espNow_last_type' 'espNow last message type'
+  spec 'r' 'espNow_last_number' 'espNow last number'
+  spec 'r' 'espNow_last_string' 'espNow last string'
+  space
+  spec ' ' '[net:ESPNowSetGroup]' 'espNow set group _ (0-255)' 'num' 0
+  spec 'r' '[net:ESPNowGroup]' 'espNow group'
+  space
+  advanced
+  spec ' ' 'espNow_send' 'espNow send raw _' 'str' 'Hello, ESP Now!'
+  spec 'r' '[net:ESPNowReceive]' 'espNow receive raw'
+  space
+  spec ' ' '[net:ESPNowSetChannel]' 'espNow set channel _' 'menu.range:1-13' 1
+  spec 'r' '[net:ESPNowChannel]' 'espNow channel'
+
+to espNow_last_type {
+  return _espNow_lastType
+}
+
+to espNow_last_number {
+  return _espNow_lastNumber
+}
+
+to espNow_last_string {
+  return _espNow_lastString
+}
+
+to espNow_receive_any {
+  local 'msg' ('[net:ESPNowReceive]')
+  if ((size msg) == 0) {
+    return (booleanConstant false)
+  }
+  if (msg == 'run') {
+    _espNow_lastType = 'run'
+    _espNow_lastString = msg
+    return (booleanConstant true)
+  }
+  if (and ((size msg) >= 5) ('NOW' == ('[data:copyFromTo]' msg 1 3))) {
+    local 'parts' ('[data:split]' msg '|')
+    if ((size parts) == 3) {
+      _espNow_lastType = 'pair'
+      _espNow_lastNumber = ('[data:convertType]' (at 2 parts) 'number')
+      _espNow_lastString = (at 3 parts)
+      return (booleanConstant true)
+    }
+  }
+  _espNow_lastType = 'other'
+  _espNow_lastString = msg
+  return (booleanConstant true)
+}
+
+to espNow_send msg {
+  '[net:ESPNowSend]' ('[data:convertType]' msg 'string')
+}
+
+to espNow_send_pair s n {
+  espNow_send ('[data:join]' 'NOW' '|' ('[data:toString]' n) '|' s)
+}
+
+
+module 'LED Display' Output
+author MicroBlocks
+version 1 15 
+description 'Minimal LED display library used to show the OmniStamp robot ID.'
+
+  spec ' ' 'displayCharacter' 'display character _' 'str' '1'
+  spec ' ' '[display:mbDisplayOff]' 'clear display'
+
+to displayCharacter s {
+  s = ('[data:join]' '' s)
+  if ((size s) == 0) {
+    '[display:mbDisplayOff]'
+    return 0
+  }
+  '[display:mbDrawShape]' ('[display:mbShapeForLetter]' (at 1 s)) 1 1
+}
+
+
+module 'Misc Primitives'
+author MicroBlocks
+version 1 11 
+description 'Only the system primitives required by OmniStamp target tracking.'
+
+  spec 'r' 'callCustomReporter' 'call _ : with _' 'str.functionNameMenu str' '' 'parameter list'
+  space
+  spec 'r' '[misc:sin]' 'fixed sine _' 'num' 9000
+  spec 'r' '[misc:sqrt]' 'sqrt _' 'num' 9
+
+module OmniStamp_v4
+author 'Liang Shuai'
+version 0 41 
+tags 'omnistamp robot omni wheel' 
+description 'OmniStamp three-wheel omnidirectional robot library.
+
+Map coordinates use +X to the right and +Y downward. Wheel speed ranges
+from -100 to 100. Positive turn speed increases the OID heading angle.
+Wheel names are top, bottom-left, and bottom-right when viewed from above.
+
+V3 uses linear PWM without dead-zone compensation. The maximum wheel speed is
+fixed at 60 percent for 3 V motors powered from 5 V.
+V3.1 adds non-blocking target tracking.
+V4 adds cross-track error correction and low-speed approach to move-to-target.
+V4.1 delays deceleration until the final 50 map units and keeps enough torque.
+'
+variables _omni_top_sign _omni_bottom_left_sign _omni_bottom_right_sign _omni_motion_active _omni_tracking_enabled _omni_track_task_started _omni_target_x _omni_target_y _omni_target_speed _omni_track_hold_angle 
+
+  spec 'r' 'OmniStamp position X' 'position X'
+  spec 'r' 'OmniStamp position Y' 'position Y'
+  spec 'r' 'OmniStamp direction' 'direction'
+  spec 'r' 'OmniStamp on map' 'on map'
+  space
+  spec ' ' 'OmniStamp set wheel speeds' 'set wheel speeds top _ bottom-left _ bottom-right _ (-100 to 100)' 'num num num' 0 0 0
+  spec ' ' 'OmniStamp stop' 'stop wheels'
+  spec ' ' 'OmniStamp brake' 'brake wheels'
+  space
+  spec ' ' 'OmniStamp move robot' 'move robot forward _ right _ turn _ (-100 to 100)' 'num num num' 50 0 0
+  spec ' ' 'OmniStamp move on map' 'move on map X speed _ Y speed _ turn _' 'num num num' 50 0 0
+  spec ' ' 'OmniStamp move along X' 'move along map X at speed _' 'num' 50
+  spec ' ' 'OmniStamp move along Y' 'move along map Y at speed _' 'num' 50
+  space
+  spec ' ' 'OmniStamp move to' 'move to X _ Y _ at speed _' 'num num num' 100 100 50
+  spec ' ' 'OmniStamp track target' 'track target X _ Y _ at speed _' 'num num num' 100 100 50
+  space
+  spec ' ' '_omni_set_wheels' '_omni_set_wheels top _ bottom-left _ bottom-right _' 'num num num' 0 0 0
+  spec ' ' '_omni_set_motor' '_omni_set_motor pin 1 _ pin 2 _ speed _' 'num num num' 0 0 0
+  spec ' ' '_omni_apply_motion' '_omni_apply_motion forward _ right _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_move_on_map' '_omni_move_on_map X _ Y _ turn _' 'num num num' 0 0 0
+  spec ' ' '_omni_track_target' '_omni_track_target'
+  spec 'r' '_omni_angle_error' '_omni_angle_error target _' 'num' 0
+  spec 'r' '_omni_limit' '_omni_limit _ to _' 'num num' 0 100
+
+to 'OmniStamp brake' {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  digitalWriteOp 14 true
+  digitalWriteOp 13 true
+  digitalWriteOp 41 true
+  digitalWriteOp 42 true
+  digitalWriteOp 1 true
+  digitalWriteOp 2 true
+  waitMillis 100
+  digitalWriteOp 14 false
+  digitalWriteOp 13 false
+  digitalWriteOp 41 false
+  digitalWriteOp 42 false
+  digitalWriteOp 1 false
+  digitalWriteOp 2 false
+}
+
+to 'OmniStamp direction' {
+  return (callCustomReporter '[sensors:position_yaw]')
+}
+
+to 'OmniStamp move along X' speed {
+  'OmniStamp move on map' speed 0 0
+}
+
+to 'OmniStamp move along Y' speed {
+  'OmniStamp move on map' 0 speed 0
+}
+
+to 'OmniStamp move on map' x_speed y_speed turn {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_move_on_map' x_speed y_speed turn
+}
+
+to 'OmniStamp move robot' forward right turn {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_apply_motion' forward right turn
+}
+
+to 'OmniStamp move to' target_x target_y speed {
+  _omni_tracking_enabled = false
+  _omni_motion_active = true
+  speed = (absoluteValue speed)
+  speed = (maximum 30 (minimum speed 100))
+  local 'start_time' (millisOp)
+  local 'hold_angle' ('OmniStamp direction')
+  local 'start_x' ('OmniStamp position X')
+  local 'start_y' ('OmniStamp position Y')
+  local 'path_dx' (target_x - start_x)
+  local 'path_dy' (target_y - start_y)
+  local 'path_length' ('[misc:sqrt]' ((path_dx * path_dx) + (path_dy * path_dy)))
+  local 'unit_x' ((path_dx * 1000) / (maximum path_length 1))
+  local 'unit_y' ((path_dy * 1000) / (maximum path_length 1))
+  local 'normal_x' (0 - unit_y)
+  local 'normal_y' unit_x
+  forever {
+    if (not _omni_motion_active) {exitLoop}
+    if (not ('OmniStamp on map')) {
+      'OmniStamp stop'
+      exitLoop
+    }
+    local 'current_x' ('OmniStamp position X')
+    local 'current_y' ('OmniStamp position Y')
+    local 'dx' (target_x - current_x)
+    local 'dy' (target_y - current_y)
+    local 'distance' ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+    if (distance <= 3) {
+      'OmniStamp brake'
+      exitLoop
+    }
+    if (((millisOp) - start_time) > 15000) {
+      'OmniStamp stop'
+      exitLoop
+    }
+    comment 'Keep the requested speed until the last 50 map units. Inside the
+approach zone, reduce speed but keep at least 30 percent to avoid stalling.'
+    local 'move_speed' speed
+    if (distance < 50) {
+      move_speed = (maximum 30 distance)
+      move_speed = (minimum move_speed speed)
+      if (move_speed < 30) {
+        move_speed = 30
+      }
+    }
+    comment 'Signed distance from the fixed start-to-target line. The normal
+vector is scaled by 1000 to preserve precision in integer arithmetic.'
+    local 'cross_error' ((((current_x - start_x) * normal_x) + ((current_y - start_y) * normal_y)) / 1000)
+    local 'cross_correction' ('_omni_limit' (cross_error * 2) 20)
+    comment 'Move toward the endpoint and add a perpendicular correction that
+pulls the robot back toward the original straight path.'
+    local 'x_speed' (((dx * move_speed) / (maximum distance 1)) - ((normal_x * cross_correction) / 1000))
+    local 'y_speed' (((dy * move_speed) / (maximum distance 1)) - ((normal_y * cross_correction) / 1000))
+    local 'turn_speed' ('_omni_limit' ('_omni_angle_error' hold_angle) 20)
+    '_omni_move_on_map' x_speed y_speed turn_speed
+    waitMillis 20
+  }
+  _omni_motion_active = false
+}
+
+to 'OmniStamp on map' {
+  return (callCustomReporter '[sensors:cube_status]')
+}
+
+to 'OmniStamp position X' {
+  return ((callCustomReporter '[sensors:position_x]') / 64)
+}
+
+to 'OmniStamp position Y' {
+  return ((callCustomReporter '[sensors:position_y]') / 64)
+}
+
+to 'OmniStamp set wheel speeds' top bottom_left bottom_right {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to 'OmniStamp stop' {
+  _omni_motion_active = false
+  _omni_tracking_enabled = false
+  '_omni_set_wheels' 0 0 0
+}
+
+to 'OmniStamp track target' target_x target_y speed {
+  _omni_motion_active = false
+  if (not _omni_tracking_enabled) {
+    _omni_track_hold_angle = ('OmniStamp direction')
+  }
+  _omni_target_x = target_x
+  _omni_target_y = target_y
+  _omni_target_speed = (maximum 0 (minimum (absoluteValue speed) 100))
+  _omni_tracking_enabled = (booleanConstant true)
+  if (not _omni_track_task_started) {
+    _omni_track_task_started = (booleanConstant true)
+    sendBroadcast '_omni_track_target'
+  }
+}
+
+to '_omni_angle_error' target {
+  local 'error' ((target % 360) - ('OmniStamp direction'))
+  if (error > 180) {
+    error += -360
+  } (error < -180) {
+    error += 360
+  }
+  return error
+}
+
+to '_omni_apply_motion' forward right turn {
+  forward = ('_omni_limit' forward 100)
+  right = ('_omni_limit' right 100)
+  turn = ('_omni_limit' turn 100)
+  local 'top' ((0 - right) + turn)
+  local 'bottom_left' ((((-866 * forward) + (500 * right)) / 1000) + turn)
+  local 'bottom_right' ((((866 * forward) + (500 * right)) / 1000) + turn)
+  local 'largest' (maximum (absoluteValue top) (maximum (absoluteValue bottom_left) (absoluteValue bottom_right)))
+  if (largest > 100) {
+    top = ((top * 100) / largest)
+    bottom_left = ((bottom_left * 100) / largest)
+    bottom_right = ((bottom_right * 100) / largest)
+  }
+  '_omni_set_wheels' top bottom_left bottom_right
+}
+
+to '_omni_limit' value limit {
+  return (maximum (0 - limit) (minimum value limit))
+}
+
+to '_omni_move_on_map' x_speed y_speed turn {
+  local 'yaw_x100' (('OmniStamp direction') * 100)
+  local 'sin_yaw' ('[misc:sin]' yaw_x100)
+  local 'cos_yaw' ('[misc:sin]' (yaw_x100 + 9000))
+  local 'forward' (((x_speed * sin_yaw) + (y_speed * cos_yaw)) >> 14)
+  local 'right' ((((0 - x_speed) * cos_yaw) + (y_speed * sin_yaw)) >> 14)
+  '_omni_apply_motion' forward right turn
+}
+
+to '_omni_set_motor' pin1 pin2 speed {
+  speed = ('_omni_limit' speed 100)
+  local 'pwm' (((absoluteValue speed) * 1023) / 100)
+  if (speed > 0) {
+    digitalWriteOp pin2 false
+    analogWriteOp pin1 pwm
+  } (speed < 0) {
+    digitalWriteOp pin1 false
+    analogWriteOp pin2 pwm
+  } else {
+    digitalWriteOp pin1 false
+    digitalWriteOp pin2 false
+  }
+}
+
+to '_omni_set_wheels' top bottom_left bottom_right {
+  if (_omni_top_sign == 0) {
+    _omni_top_sign = 1
+    _omni_bottom_left_sign = 1
+    _omni_bottom_right_sign = 1
+  }
+  top = ('_omni_limit' top 100)
+  bottom_left = ('_omni_limit' bottom_left 100)
+  bottom_right = ('_omni_limit' bottom_right 100)
+  local 'largest' (maximum (absoluteValue top) (maximum (absoluteValue bottom_left) (absoluteValue bottom_right)))
+  if (largest > 60) {
+    top = ((top * 60) / largest)
+    bottom_left = ((bottom_left * 60) / largest)
+    bottom_right = ((bottom_right * 60) / largest)
+  }
+  '_omni_set_motor' 41 42 (top * _omni_top_sign)
+  '_omni_set_motor' 1 2 (bottom_left * _omni_bottom_left_sign)
+  '_omni_set_motor' 14 13 (bottom_right * _omni_bottom_right_sign)
+}
+
+to '_omni_track_target' {
+  forever {
+    if _omni_tracking_enabled {if ('OmniStamp on map') {
+      local 'dx' (_omni_target_x - ('OmniStamp position X'))
+      local 'dy' (_omni_target_y - ('OmniStamp position Y'))
+      local 'distance' ('[misc:sqrt]' ((dx * dx) + (dy * dy)))
+      if (or (distance <= 3) (_omni_target_speed == 0)) {
+        '_omni_set_wheels' 0 0 0
+        _omni_track_task_started = (booleanConstant false)
+        return 0
+      } else {
+        local 'move_speed' (minimum _omni_target_speed (maximum 20 (distance * 2)))
+        local 'x_speed' ((dx * move_speed) / (maximum distance 1))
+        local 'y_speed' ((dy * move_speed) / (maximum distance 1))
+        local 'turn_speed' ('_omni_limit' ('_omni_angle_error' _omni_track_hold_angle) 30)
+        '_omni_move_on_map' x_speed y_speed turn_speed
+      }
+    } else {
+      '_omni_set_wheels' 0 0 0
+    }}
+    waitMillis 20
+  }
+}

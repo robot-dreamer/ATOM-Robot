@@ -39,7 +39,7 @@ The platform is intended to reduce the hardware and deployment overhead of table
 
 ```text
 ATOM-Robot/
-├── Experiment/          # Reserved for experiment configurations and data
+├── Experiment/          # Final experimental programs, data, and analysis scripts
 ├── Hardware/
 │   ├── CAD/             # Mechanical model and assembly references
 │   └── PCB/             # Schematic, Gerber files, PCB image, and BOM
@@ -54,14 +54,15 @@ Important files:
 - [PCB schematic](Hardware/PCB/Schematic.pdf)
 - [Gerber files](Hardware/PCB/Gerber_PCB.zip)
 - [Bill of materials](Hardware/PCB/BOM_ATOM.xlsx)
-- [OmniStamp MicroBlocks library](Software/OmniStamp.ubl)
+- [ATOM MicroBlocks library](Software/ATOM.ubl)
+- [Experimental programs and data](Experiment/README.md)
 
 ## Getting Started
 
 1. Review the BOM, schematic, PCB files, and mechanical model in the `Hardware` directory.
 2. Manufacture the PCB and mechanical parts, then assemble the motors, omni wheels, controller, OID sensor, display, and battery.
 3. Install [MicroBlocks](https://microblocks.fun/) and connect to the StampS3A controller.
-4. Import `Software/OmniStamp.ubl` into MicroBlocks.
+4. Import `Software/ATOM.ubl` into MicroBlocks.
 5. Place the robot on a compatible printed OID surface and verify that position and heading data are available.
 6. Build task programs using the library's pose, wheel-control, and target-tracking blocks.
 
@@ -69,9 +70,7 @@ The map coordinate convention used by the library is positive X to the right and
 
 ## Demonstrations
 
-- [Maze navigation using onboard localization](Videos/Maze.MOV)
-- [Formation performance](Videos/Formation%20performance.mov)
-- [Collaborative handling](Videos/Collaborative%20handling.mov)
+- [ATOM ICRA 2027 demonstration](Videos/ATOM%20ICRA%202027.mp4)
 
 The video files are stored using Git LFS. Install [Git LFS](https://git-lfs.com/) before cloning if you need the original video files:
 

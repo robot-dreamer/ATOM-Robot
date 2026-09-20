@@ -1,0 +1,93 @@
+module main
+author unknown
+version 1 0
+description 'ESP-NOW remote for the five-robot pentagonal-prism transport experiment. A starts and B stops.'
+
+script 50 50 {
+whenStarted
+'[net:ESPNowSetChannel]' 13
+'[net:ESPNowSetGroup]' 209
+}
+
+script 50 240 {
+whenButtonPressed 'A'
+repeat 5 {
+  espNow_send 'run'
+  waitMillis 50
+}
+}
+
+script 360 240 {
+whenButtonPressed 'B'
+repeat 5 {
+  espNow_send 'stop'
+  waitMillis 50
+}
+}
+
+
+module 'ESP Now' Comm
+author MicroBlocks
+version 1 3
+description 'Support for ESP Now peer-to-peer messaging for ESP boards.'
+variables _espNow_lastNumber _espNow_lastString _espNow_lastType
+
+  spec ' ' 'espNow_send_pair' 'espNow send pair _ = _' 'str num' 'light' 10
+  spec 'r' 'espNow_receive_any' 'espNow message received?'
+  spec 'r' 'espNow_last_type' 'espNow last message type'
+  spec 'r' 'espNow_last_number' 'espNow last number'
+  spec 'r' 'espNow_last_string' 'espNow last string'
+  space
+  spec ' ' '[net:ESPNowSetGroup]' 'espNow set group _ (0-255)' 'num' 0
+  spec 'r' '[net:ESPNowGroup]' 'espNow group'
+  space
+  advanced
+  spec ' ' 'espNow_send' 'espNow send raw _' 'str' 'Hello, ESP Now!'
+  spec 'r' '[net:ESPNowReceive]' 'espNow receive raw'
+  space
+  spec ' ' '[net:ESPNowSetChannel]' 'espNow set channel _ (1-13)' 'menu.range:1-13' 1
+  spec 'r' '[net:ESPNowChannel]' 'espNow channel'
+
+to espNow_last_type {
+  return _espNow_lastType
+}
+
+to espNow_last_number {
+  return _espNow_lastNumber
+}
+
+to espNow_last_string {
+  return _espNow_lastString
+}
+
+to espNow_receive_any {
+  local 'msg' ('[net:ESPNowReceive]')
+  if ((size msg) == 0) {
+    return (booleanConstant false)
+  }
+  if (msg == 'run') {
+    _espNow_lastType = 'run'
+    _espNow_lastString = msg
+    return (booleanConstant true)
+  }
+  if (and ((size msg) >= 5) ('NOW' == ('[data:copyFromTo]' msg 1 3))) {
+    local 'parts' ('[data:split]' msg '|')
+    if ((size parts) == 3) {
+      _espNow_lastType = 'pair'
+      _espNow_lastNumber = ('[data:convertType]' (at 2 parts) 'number')
+      _espNow_lastString = (at 3 parts)
+      return (booleanConstant true)
+    }
+  }
+  _espNow_lastType = 'other'
+  _espNow_lastString = msg
+  return (booleanConstant true)
+}
+
+to espNow_send msg {
+  '[net:ESPNowSend]' ('[data:convertType]' msg 'string')
+}
+
+to espNow_send_pair s n {
+  espNow_send ('[data:join]' 'NOW' '|' ('[data:toString]' n) '|' s)
+}
